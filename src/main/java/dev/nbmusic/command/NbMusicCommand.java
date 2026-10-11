@@ -13,23 +13,18 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.nbmusic.NbMusicMod;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
-import dev.nbmusic.core.export.SpongeSchematicWriter;
-import dev.nbmusic.core.layout.BlockGrid;
-import dev.nbmusic.core.layout.GridPos;
 import dev.nbmusic.core.layout.LayoutGenerator;
+import dev.nbmusic.world.SchematicExport;
 import dev.nbmusic.world.SchematicPlacer;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.SharedConstants;
+import dev.nbmusic.world.SongBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -40,8 +35,6 @@ import java.util.stream.Stream;
  * /nbmusic info|export|build &lt;файл&gt; [скорость%] [полифония] [ширина]
  */
 public final class NbMusicCommand {
-	private static final int MAX_BUILD_VOLUME = 4_000_000;
-
 	private NbMusicCommand() {
 	}
 
@@ -131,21 +124,12 @@ public final class NbMusicCommand {
 		}
 	}
 
-	private static String summary(Pipeline.Result r) {
-		var a = r.arrangement();
-		BlockGrid g = r.layout().grid();
-		return String.format("«%s»: %.1f с, нот %d → %d (срезано %d, перенесено по октаве %d), этажей %d, рядов %d, размер %d×%d×%d",
-				r.song().title(), a.lengthTicks() / (double) Arranger.TICKS_PER_SECOND,
-				a.inputNotes(), a.placedNotes(), a.droppedNotes(), a.shiftedNotes(),
-				r.layout().levels(), r.layout().rows(), g.width(), g.height(), g.length());
-	}
-
 	private static int info(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
 		Pipeline.Result r = process(c, file, settings);
 		if (r == null) {
 			return 0;
 		}
-		c.getSource().sendSuccess(() -> Component.literal(summary(r)), false);
+		c.getSource().sendSuccess(() -> Component.literal(SongBuilder.summary(r)), false);
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -154,17 +138,11 @@ public final class NbMusicCommand {
 		if (r == null) {
 			return 0;
 		}
-		String name = r.song().title().replaceAll("[^\\p{L}\\p{N}_.\\- ]", "_") + ".schem";
-		int dataVersion = SharedConstants.getCurrentVersion().dataVersion().version();
-		String author = c.getSource().getTextName();
 		try {
-			Path out = NbMusicMod.outputDir().resolve(name);
-			writeSchematic(r, out, author, dataVersion);
-			StringBuilder msg = new StringBuilder(summary(r)).append("\nСохранено: ").append(out.toAbsolutePath());
-			Path worldEdit = FabricLoader.getInstance().getConfigDir().resolve("worldedit").resolve("schematics");
-			if (Files.isDirectory(worldEdit)) {
-				writeSchematic(r, worldEdit.resolve(name), author, dataVersion);
-				msg.append("\nWorldEdit: //schem load ").append(Pipeline.baseName(name));
+			List<Path> written = SchematicExport.export(r, c.getSource().getTextName());
+			StringBuilder msg = new StringBuilder(SongBuilder.summary(r)).append("\nСохранено: ").append(written.getFirst().toAbsolutePath());
+			if (written.size() > 1) {
+				msg.append("\nWorldEdit: //schem load ").append(Pipeline.baseName(written.get(1).getFileName().toString()));
 			}
 			c.getSource().sendSuccess(() -> Component.literal(msg.toString()), false);
 			return Command.SINGLE_SUCCESS;
@@ -175,15 +153,6 @@ public final class NbMusicCommand {
 		}
 	}
 
-	/** При //schem load + //paste кнопка окажется в 2 блоках к востоку от игрока, на уровне ног. */
-	private static void writeSchematic(Pipeline.Result r, Path out, String author, int dataVersion) throws IOException {
-		GridPos button = r.layout().button();
-		int[] offset = {2 - button.x(), -button.y(), -button.z()};
-		try (OutputStream os = Files.newOutputStream(out)) {
-			SpongeSchematicWriter.write(r.layout().grid(), r.song().title(), author, dataVersion, offset, os);
-		}
-	}
-
 	/** Ставит схему перед игроком по направлению его взгляда; уровень механизма — на уровне ног. */
 	private static int build(CommandContext<CommandSourceStack> c, Path file, Settings settings) throws CommandSyntaxException {
 		ServerPlayer player = c.getSource().getPlayerOrException();
@@ -191,23 +160,15 @@ public final class NbMusicCommand {
 		if (r == null) {
 			return 0;
 		}
-		BlockGrid grid = r.layout().grid();
-		long volume = (long) grid.width() * grid.height() * grid.length();
-		if (volume > MAX_BUILD_VOLUME) {
-			c.getSource().sendFailure(Component.literal("Слишком большая схема (" + volume + " блоков), используй export + WorldEdit"));
-			return 0;
-		}
-		ServerLevel level = player.level();
 		Direction forward = player.getDirection();
 		BlockPos anchor = SchematicPlacer.anchorInFrontOf(player.blockPosition(), forward, r.layout().button());
-		if (anchor.getY() < level.getMinY() || anchor.getY() + grid.height() - 1 > level.getMaxY()) {
-			c.getSource().sendFailure(Component.literal("Схема высотой " + grid.height() + " не помещается по высоте мира"));
+		try {
+			String text = SongBuilder.build(player.level(), r, anchor, forward);
+			c.getSource().sendSuccess(() -> Component.literal(text), true);
+			return Command.SINGLE_SUCCESS;
+		} catch (IllegalArgumentException e) {
+			c.getSource().sendFailure(Component.literal(e.getMessage()));
 			return 0;
 		}
-		SchematicPlacer.place(level, anchor, forward, grid);
-		BlockPos button = SchematicPlacer.toWorld(anchor, forward, r.layout().button());
-		c.getSource().sendSuccess(() -> Component.literal(summary(r) + "\nПостроено. Кнопка запуска: "
-				+ button.getX() + " " + button.getY() + " " + button.getZ()), true);
-		return Command.SINGLE_SUCCESS;
 	}
 }

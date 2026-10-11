@@ -3,7 +3,7 @@
 	"id": "nbmusic",
 	"version": "${version}",
 	"name": "NoteBlock Music",
-	"description": "Загрузи музыку (MIDI) — получи схематику с нотными блоками, которая её играет.",
+	"description": "Load a MIDI file and get a schematic of note blocks that plays it: compact snake layout, settings window, preview playback and an in-world hologram.",
 	"authors": [
 		"Per5903"
 	],
@@ -12,6 +12,12 @@
 	"entrypoints": {
 		"main": [
 			"dev.nbmusic.NbMusicMod"
+		],
+		"client": [
+			"dev.nbmusic.client.NbMusicClient"
+		],
+		"modmenu": [
+			"dev.nbmusic.client.ModMenuIntegration"
 		]
 	},
 	"depends": {
@@ -19,5 +25,15 @@
 		"minecraft": "~26.2",
 		"java": ">=25",
 		"fabric-api": "*"
+	},
+	"contact": {
+		"homepage": "https://modrinth.com/mod/noteblock-music",
+		"sources": "https://github.com/Per5903/noteblock-music",
+		"issues": "https://github.com/Per5903/noteblock-music/issues"
+	},
+	"icon": "assets/nbmusic/icon.png",
+	"suggests": {
+		"modmenu": "*",
+		"worldedit": "*"
 	}
 }

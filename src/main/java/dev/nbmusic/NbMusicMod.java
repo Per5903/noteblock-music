@@ -1,6 +1,7 @@
 package dev.nbmusic;
 
 import dev.nbmusic.command.NbMusicCommand;
+import dev.nbmusic.net.ServerNetworking;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.loader.api.FabricLoader;
@@ -32,5 +33,9 @@ public class NbMusicMod implements ModInitializer {
 			LOGGER.error("Не удалось создать папки {}", inputDir().getParent(), e);
 		}
 		CommandRegistrationCallback.EVENT.register((dispatcher, ctx, env) -> NbMusicCommand.register(dispatcher));
+		ServerNetworking.register();
+		LOGGER.info("NoteBlock Music {} загружен, папка с MIDI: {}",
+				FabricLoader.getInstance().getModContainer(MOD_ID).orElseThrow().getMetadata().getVersion().getFriendlyString(),
+				inputDir().toAbsolutePath());
 	}
 }

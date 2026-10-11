@@ -35,14 +35,24 @@ public final class Pipeline {
 		if (!SUPPORTED_EXTENSIONS.contains(ext)) {
 			throw new IOException("Формат ." + ext + " пока не поддерживается, нужен MIDI (.mid)");
 		}
-		Song song;
 		try (InputStream in = Files.newInputStream(file)) {
-			song = MidiDecoder.decode(baseName(fileName), in);
+			return arrange(load(baseName(fileName), in), options, rowLength);
 		}
+	}
+
+	public static Song load(String title, InputStream in) throws IOException {
+		Song song = MidiDecoder.decode(title, in);
 		if (song.notes().isEmpty()) {
 			throw new IOException("В файле нет нот");
 		}
+		return song;
+	}
+
+	public static Result arrange(Song song, Arranger.Options options, int rowLength) {
 		Arrangement arrangement = Arranger.arrange(song, options);
+		if (arrangement.chords().isEmpty()) {
+			throw new IllegalArgumentException("Все дорожки выключены");
+		}
 		return new Result(song, arrangement, LayoutGenerator.generate(arrangement, rowLength));
 	}
 

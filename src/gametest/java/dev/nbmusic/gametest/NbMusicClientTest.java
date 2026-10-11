@@ -1,6 +1,11 @@
 package dev.nbmusic.gametest;
 
 import dev.nbmusic.NbMusicMod;
+import dev.nbmusic.client.ClientSession;
+import dev.nbmusic.client.NbMusicClient;
+import dev.nbmusic.client.NbMusicScreen;
+import dev.nbmusic.client.PreviewPlayer;
+import dev.nbmusic.core.UploadBuffer;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.layout.BlockGrid;
@@ -48,7 +53,10 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 
 		try (TestSingleplayerContext world = context.worldBuilder()
 				.setUseConsistentSettings(false)
-				.adjustSettings(s -> s.setSeed("nbmusic"))
+				.adjustSettings(s -> {
+					s.setSeed("nbmusic");
+					s.setAllowCommands(true); // «Разрешить читы»: без них строить из окна нельзя
+				})
 				.create()) {
 			TestServerContext server = world.getServer();
 			world.getConnection().waitForChunksRender();
@@ -75,6 +83,7 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 
 			buildAndPlay(context, world, server, layout, Direction.EAST, new BlockPos(0, 150, 0), "east");
 			buildAndPlay(context, world, server, layout, Direction.NORTH, new BlockPos(200, 150, 0), "north");
+			screenFlow(context, world, server);
 			log("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ");
 		}
 	}
@@ -135,6 +144,96 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 		}
 		log(name + ": сыграло " + played.size() + " из " + notes.size() + " нотных блоков");
 		check(played.size() == notes.size(), name + ": все нотные блоки сыграли");
+	}
+
+	/**
+	 * Этап 3 как игрок: клавиша R → окно → выбор файла → «Слушать» → «Закрепить здесь» →
+	 * голограмма → «Построить». Файл больше 30 КБ, чтобы уйти на сервер несколькими кусками.
+	 */
+	private static void screenFlow(ClientGameTestContext context, TestSingleplayerContext world, TestServerContext server) {
+		Path big = NbMusicMod.inputDir().resolve("big.mid");
+		try {
+			writeBigMidi(big);
+			log("big.mid: " + Files.size(big) + " байт, кусков " + UploadBuffer.chunkCount((int) Files.size(big)));
+			check(UploadBuffer.chunkCount((int) Files.size(big)) >= 2, "big.mid уходит на сервер несколькими кусками");
+		} catch (Exception e) {
+			throw new AssertionError(e);
+		}
+		BlockPos feet = new BlockPos(400, 150, 0);
+		server.runCommand(String.format("setblock %d %d %d glass", feet.getX(), feet.getY() - 1, feet.getZ()));
+		server.runCommand(String.format("tp @a %d %d %d -90 0", feet.getX(), feet.getY(), feet.getZ()));
+		world.getConnection().waitForChunksRender();
+		context.waitTicks(5);
+
+		context.getInput().pressKey(NbMusicClient.OPEN);
+		context.waitTicks(3);
+		check(context.computeOnClient(mc -> mc.gui.screen() instanceof NbMusicScreen), "клавиша R открывает окно");
+		context.clickScreenButton("▶"); // первый файл в папке — big.mid
+		context.waitTicks(3);
+		check(context.computeOnClient(mc -> ClientSession.INSTANCE.result != null
+				&& ClientSession.INSTANCE.file.getFileName().toString().equals("big.mid")), "файл выбран и разложен");
+		context.takeScreenshot("nbmusic-gui");
+
+		context.clickScreenButton("▶ Слушать");
+		context.waitTicks(40);
+		int played = context.computeOnClient(mc -> PreviewPlayer.INSTANCE.notesPlayed);
+		log("предпрослушивание: за 2 с прозвучало нот " + played);
+		check(played > 0 && context.computeOnClient(mc -> PreviewPlayer.INSTANCE.isPlaying()), "предпрослушивание играет");
+		context.takeScreenshot("nbmusic-gui-playing");
+		context.clickScreenButton("■ Стоп");
+		context.waitTicks(2);
+		check(!context.computeOnClient(mc -> PreviewPlayer.INSTANCE.isPlaying()), "кнопка «Стоп» останавливает");
+
+		context.clickScreenButton("Закрепить здесь");
+		ClientSession.Placement pinned = context.computeOnClient(mc -> ClientSession.INSTANCE.pinned);
+		check(pinned != null, "голограмма закреплена");
+		LayoutGenerator.Layout layout = context.computeOnClient(mc -> ClientSession.INSTANCE.result.layout());
+		context.clickScreenButton("Готово");
+		// смотрим на голограмму сбоку-сверху; игрок улетает, а голограмма остаётся на месте
+		BlockPos mid = SchematicPlacer.toWorld(pinned.anchor(), pinned.forward(), layout.grid().width() / 2, 0, layout.grid().length() / 2);
+		server.runCommand(String.format("tp @a %d %d %d -90 50", mid.getX() - 45, mid.getY() + 40, mid.getZ()));
+		world.getConnection().waitForChunksRender();
+		context.waitTicks(10);
+		context.takeScreenshot("nbmusic-hologram");
+
+		context.getInput().pressKey(NbMusicClient.OPEN);
+		context.waitTicks(3);
+		context.clickScreenButton("Построить");
+		context.waitTicks(20);
+		check(context.computeOnClient(mc -> mc.gui.screen() == null), "после «Построить» окно закрылось");
+
+		BlockGrid grid = layout.grid();
+		BlockPos button = SchematicPlacer.toWorld(pinned.anchor(), pinned.forward(), layout.button());
+		List<BlockPos> notes = new ArrayList<>();
+		for (int y = 0; y < grid.height(); y++) {
+			for (int z = 0; z < grid.length(); z++) {
+				for (int x = 0; x < grid.width(); x++) {
+					if (grid.get(x, y, z).startsWith("minecraft:note_block")) {
+						notes.add(SchematicPlacer.toWorld(pinned.anchor(), pinned.forward(), x, y, z));
+					}
+				}
+			}
+		}
+		boolean built = server.computeOnServer(s -> s.overworld().getBlockState(button).getBlock() instanceof ButtonBlock
+				&& notes.stream().allMatch(p -> s.overworld().getBlockState(p).getBlock() instanceof NoteBlock));
+		check(built, "«Построить» поставил схему ровно по голограмме (" + notes.size() + " нотных блоков)");
+		context.waitTicks(5);
+		context.takeScreenshot("nbmusic-built-from-gui");
+	}
+
+	/** Плотные аккорды по 10 нот — файл крупнее одного сетевого куска. */
+	private static void writeBigMidi(Path file) throws Exception {
+		Sequence seq = new Sequence(Sequence.PPQ, 480);
+		Track track = seq.createTrack();
+		for (int i = 0; i < 700; i++) {
+			long tick = i * 96L;
+			for (int v = 0; v < 10; v++) {
+				int pitch = 48 + (i * 5 + v * 3) % 36;
+				track.add(new MidiEvent(new ShortMessage(ShortMessage.NOTE_ON, v % 3, pitch, 60 + v * 6), tick));
+				track.add(new MidiEvent(new ShortMessage(ShortMessage.NOTE_OFF, v % 3, pitch, 0), tick + 90));
+			}
+		}
+		MidiSystem.write(seq, 1, file.toFile());
 	}
 
 	/** Синтетическая мелодия теста (как в серверном GameTest) в виде MIDI-файла. */

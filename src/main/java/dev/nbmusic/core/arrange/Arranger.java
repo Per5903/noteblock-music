@@ -27,9 +27,14 @@ public final class Arranger {
 	 * @param speedPercent  100 — исходный темп, 50 — вдвое медленнее
 	 * @param maxPolyphony  сколько нот максимум звучит в один тик
 	 * @param transpose     сдвиг мелодических нот в полутонах
+	 * @param mutedChannels битовая маска выключенных MIDI-каналов (бит 9 — ударные)
 	 */
-	public record Options(int speedPercent, int maxPolyphony, int transpose) {
-		public static final Options DEFAULT = new Options(100, 8, 0);
+	public record Options(int speedPercent, int maxPolyphony, int transpose, int mutedChannels) {
+		public static final Options DEFAULT = new Options(100, 8, 0, 0);
+
+		public Options(int speedPercent, int maxPolyphony, int transpose) {
+			this(speedPercent, maxPolyphony, transpose, 0);
+		}
 
 		public Options {
 			if (speedPercent <= 0) {
@@ -61,6 +66,9 @@ public final class Arranger {
 		TreeMap<Integer, Map<Long, Note>> byTick = new TreeMap<>();
 		int shifted = 0;
 		for (MidiNote m : song.notes()) {
+			if ((options.mutedChannels() >> m.channel() & 1) != 0) {
+				continue;
+			}
 			int tick = (int) Math.round(m.seconds() * ticksPerSecond);
 			Note note;
 			if (m.isDrum()) {

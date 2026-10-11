@@ -1,0 +1,5 @@
+{
+	"key.nbmusic.open": "Open NoteBlock Music",
+	"key.category.nbmusic.main": "NoteBlock Music",
+	"modmenu.descriptionTranslation.nbmusic": "Load a MIDI file and get a schematic of note blocks that plays it: compact snake layout, settings window, preview playback and an in-world hologram."
+}
