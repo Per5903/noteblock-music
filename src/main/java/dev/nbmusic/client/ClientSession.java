@@ -49,6 +49,8 @@ public final class ClientSession {
 	public int transpose = 0;
 	public int rowLength = LayoutGenerator.DEFAULT_ROW_LENGTH;
 	public int mutedChannels = 0;
+	/** Сдвиг постройки по высоте относительно ног игрока, блоков. */
+	public int heightOffset = 0;
 
 	public boolean hologram = true;
 	/** Закреплённое место голограммы; null — голограмма следует за игроком. */
@@ -75,6 +77,7 @@ public final class ClientSession {
 		transpose = c.transpose;
 		rowLength = c.rowLength;
 		hologram = c.hologram;
+		heightOffset = c.heightOffset;
 	}
 
 	/** При первом открытии окна — снова открыть последний файл. */
@@ -96,6 +99,7 @@ public final class ClientSession {
 		c.transpose = transpose;
 		c.rowLength = rowLength;
 		c.hologram = hologram;
+		c.heightOffset = heightOffset;
 		c.lastFile = file == null ? null : file.toAbsolutePath().toString();
 		ClientConfig.save(c);
 	}
@@ -245,7 +249,8 @@ public final class ClientSession {
 			return pinned;
 		}
 		Direction forward = player.getDirection();
-		return new Placement(SchematicPlacer.anchorInFrontOf(player.blockPosition(), forward, result.layout().button()), forward);
+		BlockPos feet = player.blockPosition().above(heightOffset);
+		return new Placement(SchematicPlacer.anchorInFrontOf(feet, forward, result.layout().button()), forward);
 	}
 
 	public void togglePin(Player player) {

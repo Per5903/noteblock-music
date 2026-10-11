@@ -9,7 +9,7 @@ The mod arranges the song for note blocks, lays it out as a compact redstone sna
 
 - **Audio → notes, offline.** MP3, WAV and OGG are transcribed in-game by Spotify's open-source
   [Basic Pitch](https://github.com/spotify/basic-pitch) model, executed by a small built-in ONNX interpreter in pure Java —
-  no native libraries, no internet. A 3-minute track takes ~17 s on a 12-thread CPU (up to a minute on 4 cores). Works best for solo instruments and piano;
+  no native libraries, no internet. A 3-minute track takes ~13 s on a 12-thread CPU (~40 s on 4 cores). Works best for solo instruments and piano;
   dense mixes with vocals and drums produce messy notes, so prefer MIDI for those.
 - **MIDI → note blocks.** Tempo changes, General MIDI instruments (piano → harp, bass → bass, guitars → guitar, drums → bass drum / snare / hat…), automatic fitting into each instrument's two-octave range.
 - **Compact snake layout.** Long songs fold into rows with zero-delay dust turns, so the rhythm stays exact. Chords become stacked levels (2 notes per level, up to 18 notes at once); all levels start from one button on the same tick.

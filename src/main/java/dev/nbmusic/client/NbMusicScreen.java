@@ -65,6 +65,11 @@ public final class NbMusicScreen extends Screen {
 				v -> Texts.tr("nbmusic.gui.transpose", "Transpose: %s", (v > 0 ? "+" : "") + v), v -> s.transpose = v));
 		addRenderableWidget(new IntSlider(left + 156, y, 154, LayoutGenerator.MIN_ROW_LENGTH, 256, s.rowLength,
 				v -> Texts.tr("nbmusic.gui.row_width", "Row width: %s", v), v -> s.rowLength = v));
+		y += 22;
+		// высота меняет только место постройки, а не схему — пересчёт не нужен
+		addRenderableWidget(new IntSlider(left, y, 310, -32, 32, s.heightOffset,
+				v -> Texts.tr("nbmusic.gui.height", "Height: %s blocks from your feet", (v > 0 ? "+" : "") + v),
+				v -> s.heightOffset = v));
 		y += 26;
 
 		// Дорожки: MIDI-каналы или инструменты .nbs, по 3 в строке
@@ -144,7 +149,7 @@ public final class NbMusicScreen extends Screen {
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
 		int left = width / 2 - W / 2;
 		g.centeredText(font, title, width / 2, 12, 0xFFFFFFFF);
-		int y = 28 + 24 + 22 + 26;
+		int y = 28 + 24 + 22 + 22 + 26;
 		if (!s.channels().isEmpty()) {
 			g.text(font, Texts.tr("nbmusic.gui.tracks", "Tracks (click to mute):"), left, y, 0xFFA0A0A0);
 		}

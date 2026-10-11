@@ -1,11 +1,25 @@
 package dev.nbmusic.core.io;
 
+import java.util.stream.IntStream;
+
 /**
  * Передискретизация оконным sinc-фильтром (окно Блэкмана, 16 нулей с каждой стороны).
  * При понижении частоты срез сдвигается ниже новой частоты Найквиста — без наложения спектров.
+ * Ядро фильтра берётся из заранее посчитанной таблицы (без sin/cos на каждый отвод), выход
+ * считается параллельно кусками.
  */
 public final class Resampler {
 	private static final int ZEROS = 16;
+	/** Точек таблицы на один переход через ноль; между ними — линейная интерполяция. */
+	private static final int TABLE_RES = 512;
+	private static final float[] KERNEL = new float[ZEROS * TABLE_RES + 2];
+
+	static {
+		for (int i = 0; i < KERNEL.length; i++) {
+			double x = i / (double) TABLE_RES;
+			KERNEL[i] = x >= ZEROS ? 0f : (float) (sinc(x) * window(x));
+		}
+	}
 
 	private Resampler() {
 	}
@@ -20,19 +34,35 @@ public final class Resampler {
 		// полоса пропускания относительно входной частоты Найквиста
 		double cutoff = Math.min(1.0, 1.0 / ratio) * 0.97;
 		double halfWidth = ZEROS / cutoff;
-		for (int i = 0; i < outLen; i++) {
-			double t = i * ratio;
-			int from = (int) Math.ceil(t - halfWidth);
-			int to = (int) Math.floor(t + halfWidth);
-			double sum = 0;
-			for (int k = Math.max(0, from); k <= Math.min(in.length - 1, to); k++) {
-				double x = (t - k) * cutoff;
-				double w = 0.42 + 0.5 * Math.cos(Math.PI * x / ZEROS) + 0.08 * Math.cos(2 * Math.PI * x / ZEROS);
-				sum += in[k] * sinc(x) * w;
+		int chunk = 1 << 14;
+		IntStream.range(0, (outLen + chunk - 1) / chunk).parallel().forEach(part -> {
+			int end = Math.min(outLen, (part + 1) * chunk);
+			for (int i = part * chunk; i < end; i++) {
+				double t = i * ratio;
+				int from = Math.max(0, (int) Math.ceil(t - halfWidth));
+				int to = Math.min(in.length - 1, (int) Math.floor(t + halfWidth));
+				double sum = 0;
+				for (int k = from; k <= to; k++) {
+					sum += in[k] * kernel(Math.abs((t - k) * cutoff));
+				}
+				out[i] = (float) (sum * cutoff);
 			}
-			out[i] = (float) (sum * cutoff);
-		}
+		});
 		return out;
+	}
+
+	private static float kernel(double ax) {
+		double pos = ax * TABLE_RES;
+		int i = (int) pos;
+		if (i >= KERNEL.length - 1) {
+			return 0f;
+		}
+		float frac = (float) (pos - i);
+		return KERNEL[i] + (KERNEL[i + 1] - KERNEL[i]) * frac;
+	}
+
+	private static double window(double x) {
+		return 0.42 + 0.5 * Math.cos(Math.PI * x / ZEROS) + 0.08 * Math.cos(2 * Math.PI * x / ZEROS);
 	}
 
 	private static double sinc(double x) {

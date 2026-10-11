@@ -38,8 +38,10 @@ public final class BasicPitch {
 
 	private final OnnxInterpreter interpreter;
 	private final String input;
+	private final ForkJoinPool pool;
 
 	private BasicPitch(OnnxModel model, ForkJoinPool pool) {
+		this.pool = pool;
 		this.interpreter = new OnnxInterpreter(model, pool);
 		this.input = model.inputs.getFirst();
 	}
@@ -83,7 +85,9 @@ public final class BasicPitch {
 		int totalFrames = audio.length / HOP;
 		float[][] note = new float[windows * KEPT_FRAMES][];
 		float[][] onset = new float[windows * KEPT_FRAMES][];
-		for (int w = 0; w < windows; w++) {
+		// окна независимы: считаем несколько одновременно, пока мелкие операции одного окна не грузят все ядра
+		java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
+		pool.submit(() -> java.util.stream.IntStream.range(0, windows).parallel().forEach(w -> {
 			float[] chunk = new float[WINDOW];
 			int start = w * WINDOW_HOP - OVERLAP / 2; // позиция окна в исходном аудио
 			for (int i = 0; i < WINDOW; i++) {
@@ -101,8 +105,8 @@ public final class BasicPitch {
 				note[w * KEPT_FRAMES + j] = java.util.Arrays.copyOfRange(n.f, src, src + KEYS);
 				onset[w * KEPT_FRAMES + j] = java.util.Arrays.copyOfRange(o.f, src, src + KEYS);
 			}
-			progress.accept((w + 1) / (double) windows);
-		}
+			progress.accept(done.incrementAndGet() / (double) windows);
+		})).join();
 		int frames = Math.min(totalFrames, note.length);
 		return new Posteriorgram(java.util.Arrays.copyOf(note, frames), java.util.Arrays.copyOf(onset, frames));
 	}

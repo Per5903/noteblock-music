@@ -80,6 +80,7 @@ java {
 
 test {
 	useJUnitPlatform()
+	systemProperty "nbmusic.profile", System.getProperty("nbmusic.profile", "false")
 }
 
 // Публикация: MODRINTH_TOKEN=... ./gradlew modrinth  (см. PUBLISHING.md)

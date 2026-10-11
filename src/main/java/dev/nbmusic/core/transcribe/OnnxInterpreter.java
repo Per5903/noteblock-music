@@ -16,6 +16,10 @@ import java.util.stream.IntStream;
  * свёртки по осям и пара служебных. Не общего назначения — неизвестная операция даёт ошибку.
  */
 final class OnnxInterpreter {
+	/** Профиль по операциям (нс), если задано -Dnbmusic.profile=true. */
+	static final java.util.Map<String, Long> PROFILE = Boolean.getBoolean("nbmusic.profile")
+			? new java.util.concurrent.ConcurrentHashMap<>() : null;
+
 	private final OnnxModel model;
 	private final ForkJoinPool pool;
 	/** Индекс узла, после которого значение больше не нужно. */
@@ -51,8 +55,13 @@ final class OnnxInterpreter {
 				in.add(t);
 			}
 			Tensor out;
+			long t0 = PROFILE != null ? System.nanoTime() : 0;
 			try {
 				out = execute(node, in);
+				if (PROFILE != null) {
+					String key = node.op() + (node.op().equals("Conv") ? " " + java.util.Arrays.toString(in.get(1).shape) + " in " + java.util.Arrays.toString(in.get(0).shape) : "");
+					PROFILE.merge(key, System.nanoTime() - t0, Long::sum);
+				}
 			} catch (RuntimeException e) {
 				throw new IllegalStateException("failed at node " + i + " " + node.op() + " " + in, e);
 			}
@@ -159,7 +168,7 @@ final class OnnxInterpreter {
 		return to == 9 ? Tensor.bools(x.shape, out) : Tensor.floats(x.shape, out);
 	}
 
-	private static Tensor transpose(Tensor x, long[] permAttr) {
+	private Tensor transpose(Tensor x, long[] permAttr) {
 		int r = x.rank();
 		int[] perm = new int[r];
 		for (int i = 0; i < r; i++) {
@@ -178,30 +187,49 @@ final class OnnxInterpreter {
 	}
 
 	/** Копия с произвольными шагами по исходнику: out[idx] = x[offset + Σ idx_i·stride_i]. */
-	private static Tensor gather(Tensor x, int[] outShape, int[] srcStride, int offset) {
+	private Tensor gather(Tensor x, int[] outShape, int[] srcStride, int offset) {
 		int n = Tensor.size(outShape);
 		int r = outShape.length;
-		int[] idx = new int[r];
 		float[] of = x.isLong() ? null : new float[n];
 		long[] ol = x.isLong() ? new long[n] : null;
-		int src = offset;
-		for (int i = 0; i < n; i++) {
-			if (of != null) {
-				of[i] = x.f[src];
-			} else {
-				ol[i] = x.l[src];
-			}
-			for (int d = r - 1; d >= 0; d--) {
-				idx[d]++;
-				src += srcStride[d];
-				if (idx[d] < outShape[d]) {
-					break;
-				}
-				src -= srcStride[d] * idx[d];
-				idx[d] = 0;
-			}
+		if (n == 0) {
+			return like(x, outShape, of, ol);
 		}
+		int last = r == 0 ? 1 : outShape[r - 1];
+		int lastStride = r == 0 ? 0 : srcStride[r - 1];
+		int rows = n / last;
+		// строки последнего измерения независимы — копируем их параллельно
+		chunkedRows(rows, last, (from, to) -> {
+			for (int row = from; row < to; row++) {
+				int src = offset;
+				for (int d = r - 2, rest = row; d >= 0; d--) {
+					src += (rest % outShape[d]) * srcStride[d];
+					rest /= outShape[d];
+				}
+				int o = row * last;
+				if (of != null) {
+					for (int k = 0; k < last; k++, src += lastStride) {
+						of[o + k] = x.f[src];
+					}
+				} else {
+					for (int k = 0; k < last; k++, src += lastStride) {
+						ol[o + k] = x.l[src];
+					}
+				}
+			}
+		});
 		return like(x, outShape, of, ol);
+	}
+
+	/** Параллельно по строкам, если данных много. */
+	private void chunkedRows(int rows, int rowLength, Range r) {
+		if ((long) rows * rowLength <= 1 << 16 || rows < 2) {
+			r.run(0, rows);
+			return;
+		}
+		int per = Math.max(1, (1 << 14) / Math.max(1, rowLength));
+		int parts = (rows + per - 1) / per;
+		pool.submit(() -> IntStream.range(0, parts).parallel().forEach(p -> r.run(p * per, Math.min(rows, (p + 1) * per)))).join();
 	}
 
 	private static Tensor like(Tensor x, int[] shape, float[] f, long[] l) {
@@ -250,7 +278,7 @@ final class OnnxInterpreter {
 		return like(first, outShape, of, ol);
 	}
 
-	private static Tensor slice(List<Tensor> in) {
+	private Tensor slice(List<Tensor> in) {
 		Tensor x = in.get(0);
 		long[] starts = in.get(1).longValues();
 		long[] ends = in.get(2).longValues();
@@ -292,7 +320,7 @@ final class OnnxInterpreter {
 		return gather(x, outShape, src, offset);
 	}
 
-	private static Tensor pad(List<Tensor> in, String mode) {
+	private Tensor pad(List<Tensor> in, String mode) {
 		Tensor x = in.get(0);
 		long[] pads = in.get(1).longValues();
 		float value = in.size() > 2 && in.get(2) != null ? (float) in.get(2).get(0) : 0f;
@@ -310,30 +338,45 @@ final class OnnxInterpreter {
 		int n = Tensor.size(outShape);
 		float[] out = new float[n];
 		int[] inStrides = Tensor.strides(x.shape);
-		int[] idx = new int[r];
-		for (int i = 0; i < n; i++) {
-			int src = 0;
-			boolean inside = true;
-			for (int d = 0; d < r; d++) {
-				int j = idx[d] - before[d];
-				int dim = x.shape[d];
-				if (j < 0 || j >= dim) {
-					if (!reflect) {
-						inside = false;
-						break;
+		int last = outShape[r - 1];
+		int lastDim = x.shape[r - 1];
+		int lastBefore = before[r - 1];
+		chunkedRows(n / last, last, (from, to) -> {
+			for (int row = from; row < to; row++) {
+				// база строки по всем осям, кроме последней; вне данных — вся строка = value
+				int src = 0;
+				boolean inside = true;
+				for (int d = r - 2, rest = row; d >= 0; d--) {
+					int j = rest % outShape[d] - before[d];
+					rest /= outShape[d];
+					int dim = x.shape[d];
+					if (j < 0 || j >= dim) {
+						if (!reflect) {
+							inside = false;
+							continue;
+						}
+						j = j < 0 ? -j : 2 * (dim - 1) - j;
 					}
-					j = j < 0 ? -j : 2 * (dim - 1) - j;
+					src += j * inStrides[d];
 				}
-				src += j * inStrides[d];
-			}
-			out[i] = inside ? x.f[src] : value;
-			for (int d = r - 1; d >= 0; d--) {
-				if (++idx[d] < outShape[d]) {
-					break;
+				int o = row * last;
+				if (!inside) {
+					Arrays.fill(out, o, o + last, value);
+					continue;
 				}
-				idx[d] = 0;
+				for (int k = 0; k < last; k++) {
+					int j = k - lastBefore;
+					if (j < 0 || j >= lastDim) {
+						if (!reflect) {
+							out[o + k] = value;
+							continue;
+						}
+						j = j < 0 ? -j : 2 * (lastDim - 1) - j;
+					}
+					out[o + k] = x.f[src + j];
+				}
 			}
-		}
+		});
 		return Tensor.floats(outShape, out);
 	}
 
@@ -347,12 +390,30 @@ final class OnnxInterpreter {
 		float apply(float a, float b);
 	}
 
-	private static Tensor unary(Tensor x, FloatOp op) {
+	private Tensor unary(Tensor x, FloatOp op) {
 		float[] out = new float[x.size()];
-		for (int i = 0; i < out.length; i++) {
-			out[i] = op.apply(x.f[i]);
-		}
+		float[] src = x.f;
+		chunked(out.length, (from, to) -> {
+			for (int i = from; i < to; i++) {
+				out[i] = op.apply(src[i]);
+			}
+		});
 		return Tensor.floats(x.shape, out);
+	}
+
+	private interface Range {
+		void run(int from, int to);
+	}
+
+	/** Большие массивы — кусками по 64 К в пуле, маленькие — сразу. */
+	private void chunked(int n, Range r) {
+		int chunk = 1 << 16;
+		if (n <= chunk) {
+			r.run(0, n);
+			return;
+		}
+		int parts = (n + chunk - 1) / chunk;
+		pool.submit(() -> IntStream.range(0, parts).parallel().forEach(p -> r.run(p * chunk, Math.min(n, (p + 1) * chunk)))).join();
 	}
 
 	private static int[] broadcastShape(int[]... shapes) {
@@ -536,7 +597,11 @@ final class OnnxInterpreter {
 
 	// ---------- свёртка ----------
 
-	/** Conv 2D, NCHW, group = 1. Параллельно по строкам выхода: (n, oc, oh). */
+	/**
+	 * Conv 2D, NCHW, group = 1. Вход заранее дополняется нулями по ширине, чтобы во внутреннем
+	 * цикле не было проверок границ; веса по ширине берутся по 4 за проход по строке — так на
+	 * 4 умножения приходится 6 обращений к памяти вместо 12. Параллельно по строкам выхода.
+	 */
 	private Tensor conv(Tensor x, Tensor w, Tensor bias, OnnxModel.Node node) {
 		if (node.intAttr("group", 1) != 1) {
 			throw new UnsupportedOperationException("Conv group != 1");
@@ -560,50 +625,65 @@ final class OnnxInterpreter {
 		int dw = (int) dil[1];
 		int pt = (int) pads[0];
 		int pl = (int) pads[1];
+		int pr = (int) pads[3];
 		int oh = (ih + pt + (int) pads[2] - dh * (kh - 1) - 1) / sh + 1;
-		int ow = (iw + pl + (int) pads[3] - dw * (kw - 1) - 1) / sw + 1;
+		int ow = (iw + pl + pr - dw * (kw - 1) - 1) / sw + 1;
+		int iwp = iw + pl + pr;
+		float[] in;
+		if (pl == 0 && pr == 0) {
+			in = x.f;
+		} else {
+			in = new float[batch * ic * ih * iwp];
+			for (int r = 0; r < batch * ic * ih; r++) {
+				System.arraycopy(x.f, r * iw, in, r * iwp + pl, iw);
+			}
+		}
 		float[] out = new float[batch * oc * oh * ow];
-		float[] in = x.f;
 		float[] wt = w.f;
 		float[] b = bias == null ? null : bias.f;
 		Runnable task = () -> IntStream.range(0, batch * oc * oh).parallel().forEach(row -> {
 			int y = row % oh;
 			int c = (row / oh) % oc;
 			int nIdx = row / (oh * oc);
-			int outBase = row * ow;
+			int o = row * ow;
 			if (b != null) {
-				Arrays.fill(out, outBase, outBase + ow, b[c]);
+				Arrays.fill(out, o, o + ow, b[c]);
 			}
 			for (int ci = 0; ci < ic; ci++) {
-				int inChannel = (nIdx * ic + ci) * ih * iw;
+				int inChannel = (nIdx * ic + ci) * ih * iwp;
 				int wChannel = (c * ic + ci) * kh * kw;
 				for (int ky = 0; ky < kh; ky++) {
 					int yy = y * sh - pt + ky * dh;
 					if (yy < 0 || yy >= ih) {
 						continue;
 					}
-					int inRow = inChannel + yy * iw;
-					for (int kx = 0; kx < kw; kx++) {
-						float wv = wt[wChannel + ky * kw + kx];
-						if (wv == 0) {
-							continue;
-						}
-						int shift = kx * dw - pl;
-						// допустимые ox: 0 <= ox*sw + shift < iw
-						int oxFrom = shift >= 0 ? 0 : (-shift + sw - 1) / sw;
-						int oxTo = Math.min(ow, (iw - 1 - shift) / sw + 1);
-						if (iw - 1 - shift < 0) {
-							continue;
-						}
+					int rowBase = inChannel + yy * iwp;
+					int wRow = wChannel + ky * kw;
+					int kx = 0;
+					for (; kx + 4 <= kw; kx += 4) {
+						float w0 = wt[wRow + kx];
+						float w1 = wt[wRow + kx + 1];
+						float w2 = wt[wRow + kx + 2];
+						float w3 = wt[wRow + kx + 3];
+						int b0 = rowBase + kx * dw;
+						int b1 = b0 + dw;
+						int b2 = b1 + dw;
+						int b3 = b2 + dw;
 						if (sw == 1) {
-							int base = inRow + shift;
-							for (int ox = oxFrom; ox < oxTo; ox++) {
-								out[outBase + ox] += wv * in[base + ox];
+							for (int ox = 0; ox < ow; ox++) {
+								out[o + ox] += w0 * in[b0 + ox] + w1 * in[b1 + ox] + w2 * in[b2 + ox] + w3 * in[b3 + ox];
 							}
 						} else {
-							for (int ox = oxFrom; ox < oxTo; ox++) {
-								out[outBase + ox] += wv * in[inRow + ox * sw + shift];
+							for (int ox = 0, i = 0; ox < ow; ox++, i += sw) {
+								out[o + ox] += w0 * in[b0 + i] + w1 * in[b1 + i] + w2 * in[b2 + i] + w3 * in[b3 + i];
 							}
+						}
+					}
+					for (; kx < kw; kx++) {
+						float wv = wt[wRow + kx];
+						int b0 = rowBase + kx * dw;
+						for (int ox = 0, i = 0; ox < ow; ox++, i += sw) {
+							out[o + ox] += wv * in[b0 + i];
 						}
 					}
 				}

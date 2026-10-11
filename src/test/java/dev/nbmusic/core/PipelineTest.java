@@ -65,7 +65,7 @@ class PipelineTest {
 	}
 
 	@Test
-	void limitsPolyphonyKeepingLoudest() {
+	void limitsPolyphonyKeepingEdgesAndLoudest() {
 		List<MidiNote> chord = new ArrayList<>();
 		for (int i = 0; i < 6; i++) {
 			chord.add(new MidiNote(1.0, 0, 0, 55 + i, 20 + i * 10));
@@ -74,7 +74,23 @@ class PipelineTest {
 		List<Note> notes = a.chords().get(10);
 		assertEquals(4, notes.size());
 		assertEquals(2, a.droppedNotes());
-		assertTrue(notes.stream().allMatch(n -> n.velocity() >= 40));
+		// верх (60, громкость 70) и низ (55, 20) остаются всегда, остальные места — самым громким (59 и 58)
+		assertEquals(List.of(20, 50, 60, 70), notes.stream().map(Note::velocity).sorted().toList());
+	}
+
+	/** При срезании аккорда остаются мелодия (верх) и бас (низ), октавные дубли уходят первыми. */
+	@Test
+	void reductionKeepsMelodyAndBass() {
+		List<MidiNote> chord = List.of(
+				new MidiNote(1.0, 0, 0, 79, 40),  // мелодия — тихая, но верхняя
+				new MidiNote(1.0, 0, 0, 55, 100), // громкие середины
+				new MidiNote(1.0, 0, 0, 67, 100), // октава к 55 и 79 — дубль
+				new MidiNote(1.0, 0, 0, 60, 90),
+				new MidiNote(1.0, 0, 0, 64, 90),
+				new MidiNote(1.0, 0, 0, 38, 30)); // бас (D) — тихий, но нижний
+		Arrangement a = Arranger.arrange(new Song("t", chord), new Arranger.Options(100, 4, 0));
+		List<Integer> pitches = a.chords().get(10).stream().map(n -> n.instrument().lowestMidi + n.key()).sorted().toList();
+		assertEquals(List.of(38, 60, 64, 79), pitches);
 	}
 
 	@Test

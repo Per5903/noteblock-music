@@ -22,6 +22,7 @@ final class ClientConfig {
 		int transpose = 0;
 		int rowLength = LayoutGenerator.DEFAULT_ROW_LENGTH;
 		boolean hologram = true;
+		int heightOffset = 0;
 		String lastFile;
 
 		/** Защита от ручной правки файла: значения в допустимых пределах. */
@@ -30,6 +31,7 @@ final class ClientConfig {
 			polyphony = Math.clamp(polyphony, 1, LayoutGenerator.MAX_LEVELS * 2);
 			transpose = Math.clamp(transpose, -24, 24);
 			rowLength = Math.clamp(rowLength, LayoutGenerator.MIN_ROW_LENGTH, 1024);
+			heightOffset = Math.clamp(heightOffset, -64, 64);
 			return this;
 		}
 	}

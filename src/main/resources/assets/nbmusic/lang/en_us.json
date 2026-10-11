@@ -62,6 +62,7 @@
 	"nbmusic.gui.export_tip": ".schem (WorldEdit), .litematic (Litematica), .nbt (/place template), .nbs (Note Block Studio)",
 	"nbmusic.gui.folder": "Folder",
 	"nbmusic.gui.folder_empty": "No music in %s",
+	"nbmusic.gui.height": "Height: %s blocks from your feet",
 	"nbmusic.gui.hint": "Put .mid / .nbs / .mp3 / .wav / .ogg into the folder or pick one with “Browse…”",
 	"nbmusic.gui.hologram_off": "Hologram: off",
 	"nbmusic.gui.hologram_on": "Hologram: on",

@@ -84,22 +84,25 @@ final class NoteExtractor {
 			notes.add(note(frame, start, i, key));
 		}
 
-		// Ноты без явного онсета
-		while (true) {
-			int bestT = -1;
-			int bestK = -1;
-			float best = s.frameThreshold();
-			for (int t = 0; t < frames; t++) {
-				for (int k = 0; k < keys; k++) {
-					if (energy[t][k] > best) {
-						best = energy[t][k];
-						bestT = t;
-						bestK = k;
-					}
+		// Ноты без явного онсета: от самого сильного оставшегося кадра. Энергия только обнуляется
+		// и никогда не растёт, поэтому кандидатов достаточно отсортировать один раз: текущий максимум —
+		// первый по списку, чьё значение ещё не тронуто.
+		List<long[]> candidates = new ArrayList<>();
+		for (int t = 0; t < frames; t++) {
+			for (int k = 0; k < keys; k++) {
+				if (energy[t][k] > s.frameThreshold()) {
+					candidates.add(new long[]{Float.floatToIntBits(energy[t][k]), t, k});
 				}
 			}
-			if (bestT < 0) {
-				break;
+		}
+		// значения положительные, поэтому порядок битов float совпадает с порядком чисел
+		candidates.sort((a, b) -> Long.compare(b[0], a[0]) != 0 ? Long.compare(b[0], a[0])
+				: a[1] != b[1] ? Long.compare(a[1], b[1]) : Long.compare(a[2], b[2]));
+		for (long[] cand : candidates) {
+			int bestT = (int) cand[1];
+			int bestK = (int) cand[2];
+			if (Float.floatToIntBits(energy[bestT][bestK]) != (int) cand[0]) {
+				continue; // уже израсходована другой нотой
 			}
 			energy[bestT][bestK] = 0;
 			int i = bestT + 1;

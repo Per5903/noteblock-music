@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1+26.2
+
+- **Transcription ~3× faster:** a 3-minute MP3 now takes ~13 s instead of ~37 s on a 12-thread CPU
+  (parallel MP3 decoding, table-based resampler, faster convolutions, audio windows in parallel,
+  one-pass note search).
+- **Closer to the original:** when a chord has more notes than the polyphony limit, the top voice (melody)
+  and the lowest voice (bass) are always kept, and octave duplicates (usually harmonics from transcription)
+  are dropped first.
+- **Build height:** new "Height" slider in the window (−32…+32 blocks); the hologram moves with it.
+
 ## 0.5.0+26.2
 
 - **English and Russian interface.** All texts are translatable; server messages carry English fallbacks,

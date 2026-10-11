@@ -106,14 +106,51 @@ public final class Arranger {
 		for (var e : byTick.entrySet()) {
 			List<Note> chord = new ArrayList<>(e.getValue().values());
 			if (chord.size() > options.maxPolyphony()) {
-				chord.sort(priority);
 				dropped += chord.size() - options.maxPolyphony();
-				chord = new ArrayList<>(chord.subList(0, options.maxPolyphony()));
+				chord = reduce(chord, options.maxPolyphony(), priority);
 			}
 			chord.sort(order);
 			chords.put(e.getKey(), List.copyOf(chord));
 		}
 		return new Arrangement(chords, song.notes().size(), dropped, shifted);
+	}
+
+	/**
+	 * Какие ноты аккорда оставить, если их больше лимита: сначала верхний голос (мелодия) и
+	 * нижний (бас), затем остальные по громкости, а октавные дубли уже оставленных нот — в
+	 * последнюю очередь (при распознавании аудио это обычно гармоники, а не отдельные голоса).
+	 */
+	static List<Note> reduce(List<Note> chord, int limit, Comparator<Note> priority) {
+		List<Note> melodic = chord.stream().filter(n -> !n.instrument().isPercussion()).toList();
+		List<Note> kept = new ArrayList<>();
+		if (!melodic.isEmpty()) {
+			Note top = melodic.stream().max(Comparator.comparingInt(Arranger::absolutePitch)).orElseThrow();
+			Note bottom = melodic.stream().min(Comparator.comparingInt(Arranger::absolutePitch)).orElseThrow();
+			kept.add(top);
+			if (bottom != top && limit > 1) {
+				kept.add(bottom);
+			}
+		}
+		List<Note> rest = new ArrayList<>(chord);
+		rest.removeAll(kept);
+		rest.sort(priority);
+		// проход 1 — без октавных дублей, проход 2 — дубли, если место ещё есть
+		for (int pass = 0; pass < 2 && kept.size() < limit; pass++) {
+			for (Note n : rest) {
+				if (kept.size() >= limit) {
+					break;
+				}
+				if (kept.contains(n)) {
+					continue;
+				}
+				boolean octaveDuplicate = !n.instrument().isPercussion() && kept.stream().anyMatch(k ->
+						!k.instrument().isPercussion() && Math.floorMod(absolutePitch(k) - absolutePitch(n), 12) == 0);
+				if (pass == 1 || !octaveDuplicate) {
+					kept.add(n);
+				}
+			}
+		}
+		return kept;
 	}
 
 	private record Fit(Instrument instrument, int key, boolean shifted) {

@@ -59,6 +59,11 @@ public final class AudioDecoder {
 		}
 	}
 
+	/** Кадров на «прогрев» декодера перед куском: резервуар битов и перекрытие MDCT тянутся из прошлых кадров. */
+	private static final int MP3_WARMUP_FRAMES = 2;
+	/** Меньше кадров (~25 с) не делим — выигрыша не будет. */
+	private static final int MP3_MIN_PARALLEL_FRAMES = 1000;
+
 	private static Audio mp3(byte[] data) throws IOException {
 		// javamp3 не пропускает теги: в обложке из ID3 он находит ложный «кадр» и падает.
 		// Поэтому отдаём ему только MPEG-кадры: от первого настоящего кадра Layer III до хвостовых тегов.
@@ -67,10 +72,86 @@ public final class AudioDecoder {
 			throw new Msg.Failure(new Msg("nbmusic.error.mp3_no_frames", "MP3 not recognized: no MPEG Layer III frames found"));
 		}
 		int to = Mp3Frames.audioEnd(data);
+		int[] frames = Mp3Frames.frameOffsets(data, from, to);
+		int parts = Math.min(Runtime.getRuntime().availableProcessors(), frames.length / (MP3_MIN_PARALLEL_FRAMES / 4));
+		if (frames.length >= MP3_MIN_PARALLEL_FRAMES && parts >= 2) {
+			try {
+				return mp3Parallel(data, frames, to, parts);
+			} catch (IOException | RuntimeException e) {
+				// не вышло по кускам — честно раскодируем целиком
+			}
+		}
+		Decoded d = mp3Range(data, from, to, true);
+		return pcm(d.pcm, d.format);
+	}
+
+	private record Decoded(byte[] pcm, AudioFormat format) {
+	}
+
+	/** Для тестов: декодирование MP3 целиком, без деления на куски. */
+	static Audio mp3Sequential(byte[] data) throws IOException {
+		int from = Mp3Frames.firstFrame(data, Mp3Frames.skipId3v2(data));
+		Decoded d = mp3Range(data, from, Mp3Frames.audioEnd(data), true);
+		return pcm(d.pcm, d.format);
+	}
+
+	/**
+	 * Файл режется по границам кадров на куски; каждый кусок декодируется с {@link #MP3_WARMUP_FRAMES}
+	 * кадрами перед ним, их звук отбрасывается. Склейка совпадает с декодированием целиком.
+	 */
+	private static Audio mp3Parallel(byte[] data, int[] frames, int to, int parts) throws IOException {
+		int per = (frames.length + parts - 1) / parts;
+		Decoded[] pieces = new Decoded[parts];
+		IOException[] error = new IOException[1];
+		java.util.stream.IntStream.range(0, parts).parallel().forEach(p -> {
+			int first = p * per;
+			int last = Math.min(frames.length, first + per); // не включительно
+			if (first >= last) {
+				return;
+			}
+			int warm = Math.min(MP3_WARMUP_FRAMES, first);
+			int start = frames[first - warm];
+			int end = last < frames.length ? frames[last] : to;
+			try {
+				Decoded d = mp3Range(data, start, end, p == parts - 1);
+				int channels = Math.max(1, d.format.getChannels());
+				int skip = 0;
+				for (int k = first - warm; k < first; k++) {
+					skip += Mp3Frames.samplesPerFrame(data, frames[k]) * 2 * channels;
+				}
+				int expected = 0;
+				for (int k = first; k < last; k++) {
+					expected += Mp3Frames.samplesPerFrame(data, frames[k]) * 2 * channels;
+				}
+				int got = d.pcm.length - skip;
+				// у последнего куска хвост может оборваться; у остальных длина должна сойтись до кадра
+				if (got <= 0 || (p < parts - 1 && got != expected)) {
+					throw new IOException("piece " + p + ": " + got + " bytes instead of " + expected);
+				}
+				pieces[p] = new Decoded(java.util.Arrays.copyOfRange(d.pcm, skip, d.pcm.length), d.format);
+			} catch (IOException e) {
+				error[0] = e;
+			}
+		});
+		if (error[0] != null) {
+			throw error[0];
+		}
+		ByteArrayOutputStream all = new ByteArrayOutputStream();
+		AudioFormat format = null;
+		for (Decoded d : pieces) {
+			if (d != null) {
+				all.writeBytes(d.pcm);
+				format = d.format;
+			}
+		}
+		return pcm(all.toByteArray(), format);
+	}
+
+	/** Декодирование байтов [from, to). Мусор в конце последнего куска не считается ошибкой. */
+	private static Decoded mp3Range(byte[] data, int from, int to, boolean tolerateTail) throws IOException {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		AudioFormat format;
 		try (Sound sound = new Sound(new BufferedInputStream(new ByteArrayInputStream(data, from, Math.max(0, to - from))))) {
-			format = sound.getAudioFormat();
+			AudioFormat format = sound.getAudioFormat();
 			// decodeFullyInto в javamp3 1.0.1 останавливается после первого буфера — читаем сами
 			byte[] buf = new byte[1 << 16];
 			long limit = (long) MAX_SECONDS * sound.getSamplingFrequency() * 4 + buf.length;
@@ -84,14 +165,14 @@ public final class AudioDecoder {
 				}
 			} catch (RuntimeException e) {
 				// повреждённый кадр в конце файла — оставляем то, что уже раскодировано
-				if (out.size() < oneSecond) {
+				if (!tolerateTail || out.size() < oneSecond) {
 					throw e;
 				}
 			}
+			return new Decoded(out.toByteArray(), format);
 		} catch (RuntimeException e) {
 			throw new Msg.Failure(new Msg("nbmusic.error.mp3", "MP3 not recognized: %s", e.toString()), e);
 		}
-		return pcm(out.toByteArray(), format);
 	}
 
 	/** OGG Vorbis через stb_vorbis из LWJGL — он есть в клиенте Minecraft, но не на выделенном сервере. */

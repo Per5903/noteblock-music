@@ -71,4 +71,29 @@ final class Mp3Frames {
 		}
 		return Math.max(0, end);
 	}
+
+	/** Смещения всех кадров от {@code from} до {@code to}; после мусора — поиск следующего настоящего кадра. */
+	static int[] frameOffsets(byte[] b, int from, int to) {
+		int[] out = new int[1024];
+		int n = 0;
+		int pos = from;
+		while (pos >= 0 && pos + 4 <= to) {
+			int len = frameLength(b, pos);
+			if (len <= 4) {
+				pos = firstFrame(b, pos + 1);
+				continue;
+			}
+			if (n == out.length) {
+				out = java.util.Arrays.copyOf(out, n * 2);
+			}
+			out[n++] = pos;
+			pos += len;
+		}
+		return java.util.Arrays.copyOf(out, n);
+	}
+
+	/** Отсчётов на канал в кадре: MPEG-1 — 1152, MPEG-2/2.5 — 576. */
+	static int samplesPerFrame(byte[] b, int frame) {
+		return ((b[frame + 1] >> 3) & 3) == 3 ? 1152 : 576;
+	}
 }
