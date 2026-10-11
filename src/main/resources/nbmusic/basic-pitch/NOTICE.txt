@@ -1,0 +1,8 @@
+nmp.onnx — модель Basic Pitch (ICASSP 2022), Copyright 2022 Spotify AB.
+Источник: https://github.com/spotify/basic-pitch (basic_pitch/saved_models/icassp_2022/nmp.onnx)
+Лицензия: Apache License 2.0, полный текст — LICENSE-basic-pitch.txt рядом.
+Файл модели не изменён. Исполнение модели и извлечение нот реализованы в NoteBlock Music
+самостоятельно (dev.nbmusic.core.transcribe).
+
+nmp.onnx is the Basic Pitch model (ICASSP 2022), Copyright 2022 Spotify AB, licensed under
+the Apache License 2.0 (see LICENSE-basic-pitch.txt). The model file is unmodified.

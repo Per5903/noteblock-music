@@ -4,14 +4,17 @@ import dev.nbmusic.NbMusicMod;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.UploadBuffer;
 import dev.nbmusic.core.arrange.Arranger;
+import dev.nbmusic.core.io.AudioDecoder;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.core.model.MidiNote;
 import dev.nbmusic.core.model.Song;
+import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.net.BuildRequestPayload;
 import dev.nbmusic.net.UploadChunkPayload;
 import dev.nbmusic.world.SchematicExport;
 import dev.nbmusic.world.SchematicPlacer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.entity.player.Player;
@@ -30,6 +33,11 @@ public final class ClientSession {
 	public static final ClientSession INSTANCE = new ClientSession();
 
 	public Path file;
+	/** Что отправлять на сервер: сам MIDI или MIDI, распознанный из аудио. */
+	public Path uploadFile;
+	/** 0..1, пока идёт распознавание аудио; -1 — не идёт. */
+	public volatile double transcribeProgress = -1;
+	private int loadGeneration;
 	public Song song;
 	public Pipeline.Result result;
 	public String error;
@@ -72,21 +80,70 @@ public final class ClientSession {
 		}
 	}
 
+	public boolean isTranscribing() {
+		return transcribeProgress >= 0;
+	}
+
 	public void load(Path path) {
 		PreviewPlayer.INSTANCE.stop();
+		int generation = ++loadGeneration;
 		file = path;
+		uploadFile = null;
 		song = null;
 		result = null;
 		mutedChannels = 0;
 		pinned = null;
+		error = null;
+		transcribeProgress = -1;
+		if (AudioDecoder.isAudio(path.getFileName().toString())) {
+			transcribeAsync(path, generation);
+			return;
+		}
 		try (InputStream in = Files.newInputStream(path)) {
 			song = Pipeline.load(Pipeline.baseName(path.getFileName().toString()), in);
-			error = null;
+			uploadFile = path;
 		} catch (IOException | RuntimeException e) {
 			error = "Не удалось прочитать: " + e.getMessage();
 			return;
 		}
 		recompute();
+	}
+
+	/** Распознавание в фоне; результат применяется в игровом потоке, если файл ещё выбран. */
+	private void transcribeAsync(Path path, int generation) {
+		transcribeProgress = 0;
+		Thread t = new Thread(() -> {
+			try {
+				AudioTranscriber.Result r = AudioTranscriber.transcribe(path, NbMusicMod.cacheDir(), p -> {
+					if (generation == loadGeneration) {
+						transcribeProgress = p;
+					}
+				});
+				// копия рядом со схемами — её можно открыть в любом MIDI-редакторе
+				Path copy = NbMusicMod.outputDir().resolve(SchematicExport.fileName(r.song().title()).replace(".schem", ".mid"));
+				Files.createDirectories(copy.getParent());
+				Files.copy(r.midi(), copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+				Minecraft.getInstance().execute(() -> {
+					if (generation != loadGeneration) {
+						return;
+					}
+					transcribeProgress = -1;
+					song = r.song();
+					uploadFile = r.midi();
+					recompute();
+				});
+			} catch (IOException | RuntimeException e) {
+				NbMusicMod.LOGGER.warn("Не удалось распознать {}", path, e);
+				Minecraft.getInstance().execute(() -> {
+					if (generation == loadGeneration) {
+						transcribeProgress = -1;
+						error = "Не удалось распознать: " + e.getMessage();
+					}
+				});
+			}
+		}, "nbmusic-transcribe");
+		t.setDaemon(true);
+		t.start();
 	}
 
 	/** Пересчёт аранжировки и схемы после изменения настроек. */
@@ -171,7 +228,7 @@ public final class ClientSession {
 		}
 		byte[] bytes;
 		try {
-			bytes = Files.readAllBytes(file);
+			bytes = Files.readAllBytes(uploadFile);
 		} catch (IOException e) {
 			return "Не удалось прочитать файл: " + e.getMessage();
 		}

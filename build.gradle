@@ -41,6 +41,9 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	// MP3-декодер (MIT, 38 КБ) — вкладывается в jar мода
+	implementation "fr.delthas:javamp3:${project.javamp3_version}"
+	include "fr.delthas:javamp3:${project.javamp3_version}"
 	// кнопка настроек в списке модов; в рантайме не обязателен
 	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 

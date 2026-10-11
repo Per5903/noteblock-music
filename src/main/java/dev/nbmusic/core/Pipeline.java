@@ -16,7 +16,9 @@ import java.util.Set;
 
 /** Файл → песня → аранжировка → раскладка блоков. Не зависит от Minecraft. */
 public final class Pipeline {
-	public static final Set<String> SUPPORTED_EXTENSIONS = Set.of("mid", "midi");
+	public static final Set<String> MIDI_EXTENSIONS = Set.of("mid", "midi");
+	/** MIDI и аудио (аудио сначала распознаётся, см. {@link dev.nbmusic.core.transcribe.AudioTranscriber}). */
+	public static final Set<String> SUPPORTED_EXTENSIONS = Set.of("mid", "midi", "wav", "mp3", "ogg");
 
 	private Pipeline() {
 	}
@@ -32,8 +34,10 @@ public final class Pipeline {
 	public static Result run(Path file, Arranger.Options options, int rowLength) throws IOException {
 		String fileName = file.getFileName().toString();
 		String ext = extension(fileName);
-		if (!SUPPORTED_EXTENSIONS.contains(ext)) {
-			throw new IOException("Формат ." + ext + " пока не поддерживается, нужен MIDI (.mid)");
+		if (!MIDI_EXTENSIONS.contains(ext)) {
+			throw new IOException(SUPPORTED_EXTENSIONS.contains(ext)
+					? "Аудио ." + ext + " сначала нужно распознать (AudioTranscriber)"
+					: "Формат ." + ext + " не поддерживается: нужен MIDI, MP3, WAV или OGG");
 		}
 		try (InputStream in = Files.newInputStream(file)) {
 			return arrange(load(baseName(fileName), in), options, rowLength);

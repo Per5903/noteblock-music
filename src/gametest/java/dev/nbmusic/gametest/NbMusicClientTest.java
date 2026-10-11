@@ -6,6 +6,7 @@ import dev.nbmusic.client.NbMusicClient;
 import dev.nbmusic.client.NbMusicScreen;
 import dev.nbmusic.client.PreviewPlayer;
 import dev.nbmusic.core.UploadBuffer;
+import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.layout.BlockGrid;
@@ -84,6 +85,7 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 			buildAndPlay(context, world, server, layout, Direction.EAST, new BlockPos(0, 150, 0), "east");
 			buildAndPlay(context, world, server, layout, Direction.NORTH, new BlockPos(200, 150, 0), "north");
 			screenFlow(context, world, server);
+			audioFlow(context, world, server);
 			log("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ");
 		}
 	}
@@ -219,6 +221,83 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 		check(built, "«Построить» поставил схему ровно по голограмме (" + notes.size() + " нотных блоков)");
 		context.waitTicks(5);
 		context.takeScreenshot("nbmusic-built-from-gui");
+	}
+
+	/** Ноты синтетической мелодии из resources/audio (как в юнит-тесте AudioPipelineTest). */
+	private static final int[] MELODY_PITCHES = {60, 64, 67, 72, 65, 69, 72, 48, 71, 74, 79};
+
+	/**
+	 * Аудио: команда с MP3 распознаёт в фоне и отвечает в чат; окно распознаёт OGG
+	 * (stb_vorbis есть только в клиенте) с полосой прогресса и строит по кнопке.
+	 */
+	private static void audioFlow(ClientGameTestContext context, TestSingleplayerContext world, TestServerContext server) {
+		Path mp3 = NbMusicMod.inputDir().resolve("melody.mp3");
+		Path ogg = NbMusicMod.inputDir().resolve("melody.ogg");
+		try {
+			for (Path p : List.of(mp3, ogg)) {
+				try (var in = NbMusicClientTest.class.getResourceAsStream("/audio/" + p.getFileName())) {
+					Files.write(p, in.readAllBytes());
+				}
+			}
+		} catch (Exception e) {
+			throw new AssertionError(e);
+		}
+
+		server.runCommand("execute as @a at @s run nbmusic info melody.mp3");
+		int waited = 0;
+		while (!AudioTranscriber.isCached(mp3, NbMusicMod.cacheDir()) && waited < 1200) {
+			context.waitTicks(10);
+			waited += 10;
+		}
+		log("команда распознала MP3 за ~" + waited / 20.0 + " с");
+		check(AudioTranscriber.isCached(mp3, NbMusicMod.cacheDir()), "/nbmusic info с MP3 распознаёт в фоне и кэширует");
+		context.waitTicks(5);
+
+		BlockPos feet = new BlockPos(600, 150, 0);
+		server.runCommand(String.format("setblock %d %d %d glass", feet.getX(), feet.getY() - 1, feet.getZ()));
+		server.runCommand(String.format("tp @a %d %d %d -90 0", feet.getX(), feet.getY(), feet.getZ()));
+		world.getConnection().waitForChunksRender();
+		context.getInput().pressKey(NbMusicClient.OPEN);
+		context.waitTicks(3);
+		context.runOnClient(mc -> ClientSession.INSTANCE.load(ogg));
+		context.waitTicks(4);
+		check(context.computeOnClient(mc -> ClientSession.INSTANCE.isTranscribing()), "OGG распознаётся в фоне");
+		context.takeScreenshot("nbmusic-audio-transcribing");
+		waited = 0;
+		while (context.computeOnClient(mc -> ClientSession.INSTANCE.isTranscribing()) && waited < 1200) {
+			context.waitTicks(5);
+			waited += 5;
+		}
+		String error = context.computeOnClient(mc -> ClientSession.INSTANCE.error);
+		check(error == null, "OGG распознан без ошибок (" + error + "), ~" + waited / 20.0 + " с");
+		List<Integer> pitches = context.computeOnClient(mc -> ClientSession.INSTANCE.song.notes().stream().map(MidiNote::pitch).toList());
+		log("OGG → ноты " + pitches);
+		for (int p : MELODY_PITCHES) {
+			check(pitches.contains(p), "в OGG услышана нота " + p);
+		}
+		check(context.computeOnClient(mc -> ClientSession.INSTANCE.uploadFile.getFileName().toString().endsWith(".mid")),
+				"на сервер уйдёт распознанный MIDI");
+		context.waitTicks(3);
+		context.takeScreenshot("nbmusic-audio-ready");
+
+		context.clickScreenButton("Закрепить здесь");
+		ClientSession.Placement pinned = context.computeOnClient(mc -> ClientSession.INSTANCE.pinned);
+		LayoutGenerator.Layout layout = context.computeOnClient(mc -> ClientSession.INSTANCE.result.layout());
+		context.clickScreenButton("Построить");
+		context.waitTicks(20);
+		BlockGrid grid = layout.grid();
+		List<BlockPos> notes = new ArrayList<>();
+		for (int y = 0; y < grid.height(); y++) {
+			for (int z = 0; z < grid.length(); z++) {
+				for (int x = 0; x < grid.width(); x++) {
+					if (grid.get(x, y, z).startsWith("minecraft:note_block")) {
+						notes.add(SchematicPlacer.toWorld(pinned.anchor(), pinned.forward(), x, y, z));
+					}
+				}
+			}
+		}
+		boolean built = server.computeOnServer(s -> notes.stream().allMatch(p -> s.overworld().getBlockState(p).getBlock() instanceof NoteBlock));
+		check(built && !notes.isEmpty(), "песня из OGG построена по голограмме (" + notes.size() + " нотных блоков)");
 	}
 
 	/** Плотные аккорды по 10 нот — файл крупнее одного сетевого куска. */

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0+26.2
+
+- **MP3, WAV and OGG support.** Notes are transcribed in-game by Spotify's Basic Pitch model (Apache-2.0),
+  run by a built-in ONNX interpreter in pure Java — no native libraries, +270 KB.
+- Background transcription with a progress bar in the window; commands transcribe in the background and reply in chat.
+- Results are cached by file hash; the transcribed MIDI is also saved to `nbmusic/output/`.
+- Retrigger filter: sustained notes are not repeated when other notes start.
+- MP3 decoding via javamp3 (MIT); OGG via the game's stb_vorbis.
+
 ## 0.3.0+26.2
 
 - Settings window (key **R**, Mod Menu): file picker, speed, polyphony, transpose, row width, per-channel mute.

@@ -124,7 +124,12 @@ public final class NbMusicScreen extends Screen {
 			g.text(font, "Дорожки (нажми, чтобы выключить):", left, y, 0xFFA0A0A0);
 		}
 		int infoY = height - 50 - 34;
-		if (s.error != null) {
+		if (s.isTranscribing()) {
+			int pct = (int) Math.round(s.transcribeProgress * 100);
+			g.text(font, "Распознаю ноты нейросетью Basic Pitch… " + pct + "%", left, infoY, 0xFF80D8FF);
+			g.fill(left, infoY + 12, left + W, infoY + 15, 0xFF404040);
+			g.fill(left, infoY + 12, left + (int) (W * s.transcribeProgress), infoY + 15, 0xFF80D8FF);
+		} else if (s.error != null) {
 			g.text(font, s.error, left, infoY, 0xFFFF6060);
 		} else if (s.result != null) {
 			for (String line : wrap(SongBuilder.summary(s.result), 2)) {
@@ -132,7 +137,7 @@ public final class NbMusicScreen extends Screen {
 				infoY += 10;
 			}
 		} else {
-			g.text(font, "Положи .mid в папку (кнопка «Папка») или выбери через «Обзор…»", left, infoY, 0xFFA0A0A0);
+			g.text(font, "Положи .mid / .mp3 / .wav / .ogg в папку или выбери через «Обзор…»", left, infoY, 0xFFA0A0A0);
 		}
 		if (PreviewPlayer.INSTANCE.isPlaying()) {
 			int barY = height - 50 - 6;
@@ -147,13 +152,17 @@ public final class NbMusicScreen extends Screen {
 	@Override
 	public void tick() {
 		// кнопка «Стоп» сама возвращается в «Слушать», когда песня доиграла
-		if (!PreviewPlayer.INSTANCE.isPlaying() && wasPlaying) {
+		// и кнопки включаются, когда распознавание закончилось
+		boolean busy = s.isTranscribing();
+		if (!PreviewPlayer.INSTANCE.isPlaying() && wasPlaying || busy != wasBusy) {
 			rebuildWidgets();
 		}
 		wasPlaying = PreviewPlayer.INSTANCE.isPlaying();
+		wasBusy = busy;
 	}
 
 	private boolean wasPlaying;
+	private boolean wasBusy;
 
 	@Override
 	public boolean isPauseScreen() {
@@ -168,7 +177,7 @@ public final class NbMusicScreen extends Screen {
 	private void cycleFile(int step) {
 		List<Path> files = ClientSession.inputFiles();
 		if (files.isEmpty()) {
-			status = "В папке нет .mid: " + NbMusicMod.inputDir().toAbsolutePath();
+			status = "В папке нет музыки: " + NbMusicMod.inputDir().toAbsolutePath();
 			return;
 		}
 		int i = files.indexOf(s.file);
@@ -191,10 +200,14 @@ public final class NbMusicScreen extends Screen {
 		Thread t = new Thread(() -> {
 			String chosen;
 			try (MemoryStack stack = MemoryStack.stackPush()) {
-				PointerBuffer filters = stack.mallocPointer(2);
-				filters.put(stack.UTF8("*.mid")).put(stack.UTF8("*.midi")).flip();
-				chosen = TinyFileDialogs.tinyfd_openFileDialog("NoteBlock Music: выбери MIDI",
-						NbMusicMod.inputDir().toAbsolutePath() + "/", filters, "MIDI (*.mid)", false);
+				String[] patterns = {"*.mid", "*.midi", "*.mp3", "*.wav", "*.ogg"};
+				PointerBuffer filters = stack.mallocPointer(patterns.length);
+				for (String p : patterns) {
+					filters.put(stack.UTF8(p));
+				}
+				filters.flip();
+				chosen = TinyFileDialogs.tinyfd_openFileDialog("NoteBlock Music: выбери музыку",
+						NbMusicMod.inputDir().toAbsolutePath() + "/", filters, "MIDI / MP3 / WAV / OGG", false);
 			}
 			if (chosen != null) {
 				Minecraft.getInstance().execute(() -> {

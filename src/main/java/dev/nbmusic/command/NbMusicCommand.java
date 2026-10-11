@@ -13,6 +13,8 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.nbmusic.NbMusicMod;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
+import dev.nbmusic.core.io.AudioDecoder;
+import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.world.SchematicExport;
 import dev.nbmusic.world.SchematicPlacer;
@@ -22,12 +24,17 @@ import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 
 /**
@@ -44,8 +51,15 @@ public final class NbMusicCommand {
 	}
 
 	private interface Action {
-		int run(CommandContext<CommandSourceStack> c, Path file, Settings settings) throws CommandSyntaxException;
+		int run(CommandContext<CommandSourceStack> c, Pipeline.Result result) throws CommandSyntaxException;
 	}
+
+	/** Распознавание аудио по одному за раз, чтобы не забрать у сервера все ядра. */
+	private static final ExecutorService TRANSCRIBE = Executors.newSingleThreadExecutor(r -> {
+		Thread t = new Thread(r, "nbmusic-command-transcribe");
+		t.setDaemon(true);
+		return t;
+	});
 
 	public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
 		dispatcher.register(Commands.literal("nbmusic")
@@ -59,13 +73,59 @@ public final class NbMusicCommand {
 	private static ArgumentBuilder<CommandSourceStack, ?> withFile(String name, Action action) {
 		return Commands.literal(name).then(Commands.argument("file", StringArgumentType.string())
 				.suggests(FILES)
-				.executes(c -> action.run(c, resolve(c), Settings.DEFAULT))
+				.executes(c -> start(c, resolve(c), Settings.DEFAULT, action))
 				.then(Commands.argument("speed", IntegerArgumentType.integer(10, 400))
-						.executes(c -> action.run(c, resolve(c), settings(c, 1)))
+						.executes(c -> start(c, resolve(c), settings(c, 1), action))
 						.then(Commands.argument("polyphony", IntegerArgumentType.integer(1, LayoutGenerator.MAX_LEVELS * 2))
-								.executes(c -> action.run(c, resolve(c), settings(c, 2)))
+								.executes(c -> start(c, resolve(c), settings(c, 2), action))
 								.then(Commands.argument("width", IntegerArgumentType.integer(LayoutGenerator.MIN_ROW_LENGTH, 1024))
-										.executes(c -> action.run(c, resolve(c), settings(c, 3)))))));
+										.executes(c -> start(c, resolve(c), settings(c, 3), action))))));
+	}
+
+	/**
+	 * MIDI и уже распознанное аудио обрабатываются сразу. Новое аудио распознаётся в фоне,
+	 * а действие выполняется в игровом потоке, когда ноты готовы.
+	 */
+	private static int start(CommandContext<CommandSourceStack> c, Path file, Settings settings, Action action) throws CommandSyntaxException {
+		String name = file.getFileName().toString();
+		if (!AudioDecoder.isAudio(name)) {
+			Pipeline.Result r = process(c, () -> Pipeline.run(file, settings.options(), settings.rowLength()));
+			return r == null ? 0 : action.run(c, r);
+		}
+		Path cache = NbMusicMod.cacheDir();
+		if (AudioTranscriber.isCached(file, cache)) {
+			Pipeline.Result r = process(c, () -> Pipeline.arrange(AudioTranscriber.transcribe(file, cache, p -> {
+			}).song(), settings.options(), settings.rowLength()));
+			return r == null ? 0 : action.run(c, r);
+		}
+		CommandSourceStack source = c.getSource();
+		MinecraftServer server = source.getServer();
+		source.sendSuccess(() -> Component.literal("Распознаю ноты в «" + name + "» — это займёт до минуты, результат придёт в чат"), false);
+		CompletableFuture.supplyAsync(() -> {
+			try {
+				return AudioTranscriber.transcribe(file, cache, p -> {
+				}).song();
+			} catch (IOException e) {
+				throw new CompletionException(e);
+			}
+		}, TRANSCRIBE).whenComplete((song, error) -> server.execute(() -> {
+			if (error != null) {
+				Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+				NbMusicMod.LOGGER.warn("Не удалось распознать {}", name, cause);
+				source.sendFailure(Component.literal("Не удалось распознать «" + name + "»: " + cause.getMessage()));
+				return;
+			}
+			Pipeline.Result r = process(c, () -> Pipeline.arrange(song, settings.options(), settings.rowLength()));
+			if (r == null) {
+				return;
+			}
+			try {
+				action.run(c, r);
+			} catch (CommandSyntaxException e) {
+				source.sendFailure(Component.literal(e.getRawMessage().getString()));
+			}
+		}));
+		return Command.SINGLE_SUCCESS;
 	}
 
 	/** @param given сколько необязательных аргументов указано: скорость, полифония, ширина */
@@ -109,35 +169,31 @@ public final class NbMusicCommand {
 	private static int list(CommandContext<CommandSourceStack> c) {
 		List<String> files = inputFiles();
 		String text = files.isEmpty()
-				? "Папка пуста. Положи .mid в " + NbMusicMod.inputDir().toAbsolutePath()
+				? "Папка пуста. Положи .mid / .mp3 / .wav / .ogg в " + NbMusicMod.inputDir().toAbsolutePath()
 				: "Файлы (" + files.size() + "):\n  " + String.join("\n  ", files);
 		c.getSource().sendSuccess(() -> Component.literal(text), false);
 		return files.size();
 	}
 
-	private static Pipeline.Result process(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
+	private interface Job {
+		Pipeline.Result get() throws IOException;
+	}
+
+	private static Pipeline.Result process(CommandContext<CommandSourceStack> c, Job job) {
 		try {
-			return Pipeline.run(file, settings.options(), settings.rowLength());
+			return job.get();
 		} catch (IOException | IllegalArgumentException e) {
 			c.getSource().sendFailure(Component.literal("Ошибка: " + e.getMessage()));
 			return null;
 		}
 	}
 
-	private static int info(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
-		Pipeline.Result r = process(c, file, settings);
-		if (r == null) {
-			return 0;
-		}
+	private static int info(CommandContext<CommandSourceStack> c, Pipeline.Result r) {
 		c.getSource().sendSuccess(() -> Component.literal(SongBuilder.summary(r)), false);
 		return Command.SINGLE_SUCCESS;
 	}
 
-	private static int export(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
-		Pipeline.Result r = process(c, file, settings);
-		if (r == null) {
-			return 0;
-		}
+	private static int export(CommandContext<CommandSourceStack> c, Pipeline.Result r) {
 		try {
 			List<Path> written = SchematicExport.export(r, c.getSource().getTextName());
 			StringBuilder msg = new StringBuilder(SongBuilder.summary(r)).append("\nСохранено: ").append(written.getFirst().toAbsolutePath());
@@ -154,12 +210,8 @@ public final class NbMusicCommand {
 	}
 
 	/** Ставит схему перед игроком по направлению его взгляда; уровень механизма — на уровне ног. */
-	private static int build(CommandContext<CommandSourceStack> c, Path file, Settings settings) throws CommandSyntaxException {
+	private static int build(CommandContext<CommandSourceStack> c, Pipeline.Result r) throws CommandSyntaxException {
 		ServerPlayer player = c.getSource().getPlayerOrException();
-		Pipeline.Result r = process(c, file, settings);
-		if (r == null) {
-			return 0;
-		}
 		Direction forward = player.getDirection();
 		BlockPos anchor = SchematicPlacer.anchorInFrontOf(player.blockPosition(), forward, r.layout().button());
 		try {

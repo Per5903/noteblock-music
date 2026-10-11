@@ -20,6 +20,11 @@ public class NbMusicMod implements ModInitializer {
 		return FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("input");
 	}
 
+	/** Распознанные аудиофайлы (MIDI по хэшу содержимого). */
+	public static Path cacheDir() {
+		return FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("cache");
+	}
+
 	public static Path outputDir() {
 		return FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("output");
 	}
