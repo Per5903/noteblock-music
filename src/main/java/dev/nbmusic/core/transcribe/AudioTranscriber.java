@@ -1,5 +1,6 @@
 package dev.nbmusic.core.transcribe;
 
+import dev.nbmusic.core.Msg;
 import dev.nbmusic.core.io.AudioDecoder;
 import dev.nbmusic.core.io.MidiDecoder;
 import dev.nbmusic.core.io.MidiWriter;
@@ -83,7 +84,7 @@ public final class AudioTranscriber {
 		progress.accept(0.05);
 		List<MidiNote> notes = BasicPitch.load(POOL).transcribe(mono, p -> progress.accept(0.05 + 0.93 * p));
 		if (notes.isEmpty()) {
-			throw new IOException("Не удалось услышать ни одной ноты");
+			throw new Msg.Failure(new Msg("nbmusic.error.no_notes_heard", "Could not hear a single note"));
 		}
 		Song song = new Song(title, notes);
 		byte[] midi = MidiWriter.write(song);

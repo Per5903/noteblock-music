@@ -11,9 +11,10 @@ import net.minecraft.resources.Identifier;
 
 /**
  * Построить загруженный файл: настройки окна и место, где стоит голограмма.
+ * {@code format} — расширение загруженного файла (mid или nbs; аудио клиент уже превратил в MIDI),
  * {@code anchor} — мировая позиция клетки (0,0,0) сетки, {@code forward} — направление рядов.
  */
-public record BuildRequestPayload(String title, Arranger.Options options, int rowLength, BlockPos anchor, Direction forward)
+public record BuildRequestPayload(String title, String format, Arranger.Options options, int rowLength, BlockPos anchor, Direction forward)
 		implements CustomPacketPayload {
 	public static final Type<BuildRequestPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(NbMusicMod.MOD_ID, "build"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, BuildRequestPayload> CODEC =
@@ -21,12 +22,14 @@ public record BuildRequestPayload(String title, Arranger.Options options, int ro
 
 	private static BuildRequestPayload read(RegistryFriendlyByteBuf buf) {
 		String title = buf.readUtf(256);
+		String format = buf.readUtf(8);
 		Arranger.Options options = new Arranger.Options(buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt());
-		return new BuildRequestPayload(title, options, buf.readVarInt(), buf.readBlockPos(), buf.readEnum(Direction.class));
+		return new BuildRequestPayload(title, format, options, buf.readVarInt(), buf.readBlockPos(), buf.readEnum(Direction.class));
 	}
 
 	private void write(RegistryFriendlyByteBuf buf) {
 		buf.writeUtf(title, 256);
+		buf.writeUtf(format, 8);
 		buf.writeVarInt(options.speedPercent());
 		buf.writeVarInt(options.maxPolyphony());
 		buf.writeVarInt(options.transpose());

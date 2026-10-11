@@ -3,12 +3,13 @@ package dev.nbmusic.core;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.arrange.Arranger.Arrangement;
 import dev.nbmusic.core.io.MidiDecoder;
+import dev.nbmusic.core.io.NbsFormat;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.core.layout.LayoutGenerator.Layout;
 import dev.nbmusic.core.model.Song;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
@@ -16,9 +17,10 @@ import java.util.Set;
 
 /** Файл → песня → аранжировка → раскладка блоков. Не зависит от Minecraft. */
 public final class Pipeline {
-	public static final Set<String> MIDI_EXTENSIONS = Set.of("mid", "midi");
-	/** MIDI и аудио (аудио сначала распознаётся, см. {@link dev.nbmusic.core.transcribe.AudioTranscriber}). */
-	public static final Set<String> SUPPORTED_EXTENSIONS = Set.of("mid", "midi", "wav", "mp3", "ogg");
+	/** Файлы с готовыми нотами: читаются сразу. */
+	public static final Set<String> NOTE_EXTENSIONS = Set.of("mid", "midi", "nbs");
+	/** Ноты и аудио (аудио сначала распознаётся, см. {@link dev.nbmusic.core.transcribe.AudioTranscriber}). */
+	public static final Set<String> SUPPORTED_EXTENSIONS = Set.of("mid", "midi", "nbs", "wav", "mp3", "ogg");
 
 	private Pipeline() {
 	}
@@ -34,20 +36,24 @@ public final class Pipeline {
 	public static Result run(Path file, Arranger.Options options, int rowLength) throws IOException {
 		String fileName = file.getFileName().toString();
 		String ext = extension(fileName);
-		if (!MIDI_EXTENSIONS.contains(ext)) {
+		if (!NOTE_EXTENSIONS.contains(ext)) {
 			throw new IOException(SUPPORTED_EXTENSIONS.contains(ext)
-					? "Аудио ." + ext + " сначала нужно распознать (AudioTranscriber)"
-					: "Формат ." + ext + " не поддерживается: нужен MIDI, MP3, WAV или OGG");
+					? "Audio ." + ext + " must be transcribed first (AudioTranscriber)"
+					: new Msg("nbmusic.error.format", "Format .%s is not supported: use MIDI, NBS, MP3, WAV or OGG", ext).text());
 		}
-		try (InputStream in = Files.newInputStream(file)) {
-			return arrange(load(baseName(fileName), in), options, rowLength);
-		}
+		return arrange(load(baseName(fileName), ext, Files.readAllBytes(file)), options, rowLength);
 	}
 
-	public static Song load(String title, InputStream in) throws IOException {
-		Song song = MidiDecoder.decode(title, in);
+	/** Файл с нотами по расширению: MIDI или Note Block Studio. */
+	public static Song load(String title, String extension, byte[] data) throws IOException {
+		Song song = switch (extension.toLowerCase(Locale.ROOT)) {
+			case "mid", "midi" -> MidiDecoder.decode(title, new ByteArrayInputStream(data));
+			case "nbs" -> NbsFormat.read(title, data);
+			default -> throw new Msg.Failure(new Msg("nbmusic.error.format",
+					"Format .%s is not supported: use MIDI, NBS, MP3, WAV or OGG", extension));
+		};
 		if (song.notes().isEmpty()) {
-			throw new IOException("В файле нет нот");
+			throw new Msg.Failure(new Msg("nbmusic.error.no_notes", "The file has no notes"));
 		}
 		return song;
 	}
@@ -55,7 +61,7 @@ public final class Pipeline {
 	public static Result arrange(Song song, Arranger.Options options, int rowLength) {
 		Arrangement arrangement = Arranger.arrange(song, options);
 		if (arrangement.chords().isEmpty()) {
-			throw new IllegalArgumentException("Все дорожки выключены");
+			throw new Msg.Invalid(new Msg("nbmusic.error.all_muted", "All tracks are muted"));
 		}
 		return new Result(song, arrangement, LayoutGenerator.generate(arrangement, rowLength));
 	}

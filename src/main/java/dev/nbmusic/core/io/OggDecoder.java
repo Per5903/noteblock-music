@@ -1,5 +1,6 @@
 package dev.nbmusic.core.io;
 
+import dev.nbmusic.core.Msg;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.stb.STBVorbisInfo;
 import org.lwjgl.system.MemoryStack;
@@ -27,7 +28,7 @@ final class OggDecoder {
 			IntBuffer error = stack.mallocInt(1);
 			long handle = STBVorbis.stb_vorbis_open_memory(encoded, error, null);
 			if (handle == 0) {
-				throw new IOException("OGG не распознан (нужен Vorbis), код " + error.get(0));
+				throw new Msg.Failure(new Msg("nbmusic.error.ogg", "OGG not recognized (Vorbis required), code %s", error.get(0)));
 			}
 			try {
 				STBVorbisInfo info = STBVorbisInfo.malloc(stack);
@@ -36,10 +37,10 @@ final class OggDecoder {
 				int rate = info.sample_rate();
 				int frames = STBVorbis.stb_vorbis_stream_length_in_samples(handle);
 				if (channels <= 0 || rate <= 0 || frames <= 0) {
-					throw new IOException("OGG без звука");
+					throw new Msg.Failure(new Msg("nbmusic.error.no_sound", "The file has no sound"));
 				}
 				if ((long) frames > (long) AudioDecoder.MAX_SECONDS * rate) {
-					throw new IOException("Слишком длинный трек (максимум " + AudioDecoder.MAX_SECONDS / 60 + " мин)");
+					throw new Msg.Failure(new Msg("nbmusic.error.too_long", "The track is too long (max %s min)", AudioDecoder.MAX_SECONDS / 60));
 				}
 				ShortBuffer pcm = ByteBuffer.allocateDirect(frames * channels * 2).order(ByteOrder.nativeOrder()).asShortBuffer();
 				int decoded = 0;

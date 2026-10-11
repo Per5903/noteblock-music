@@ -1,5 +1,6 @@
 package dev.nbmusic.core.layout;
 
+import dev.nbmusic.core.Msg;
 import dev.nbmusic.core.arrange.Arranger.Arrangement;
 import dev.nbmusic.core.model.Instrument;
 import dev.nbmusic.core.model.Note;
@@ -74,12 +75,12 @@ public final class LayoutGenerator {
 
 	public static Layout generate(Arrangement arrangement, int rowLength) {
 		if (rowLength < MIN_ROW_LENGTH) {
-			throw new IllegalArgumentException("Длина ряда меньше " + MIN_ROW_LENGTH);
+			throw new IllegalArgumentException("row length below " + MIN_ROW_LENGTH);
 		}
 		int levels = levelsFor(arrangement.maxChord());
 		if (levels > MAX_LEVELS) {
-			throw new IllegalArgumentException("Слишком много одновременных нот: " + arrangement.maxChord()
-					+ " (максимум " + MAX_LEVELS * 2 + ")");
+			throw new Msg.Invalid(new Msg("nbmusic.error.too_many_notes", "Too many simultaneous notes: %s (max %s)",
+					arrangement.maxChord(), MAX_LEVELS * 2));
 		}
 
 		List<Cell> cells = cells(arrangement.chords());

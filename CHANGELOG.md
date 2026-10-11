@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0+26.2
+
+- **English and Russian interface.** All texts are translatable; server messages carry English fallbacks,
+  so players without the mod see English instead of raw keys.
+- **Export to four formats at once:** `.schem` (WorldEdit), `.litematic` (Litematica; copied to `.minecraft/schematics`),
+  `.nbt` (copied into the world: `/place template nbmusic:<name>`), `.nbs` (Note Block Studio).
+- **Note Block Studio import** (`.nbs`, legacy format and v1–5): instruments and keys are kept exactly.
+- Window settings and the last file are remembered (`config/nbmusic.json`).
+- Fix: MP3 files with ID3 tags / cover art failed to decode ("Index 63 out of bounds").
+
 ## 0.4.0+26.2
 
 - **MP3, WAV and OGG support.** Notes are transcribed in-game by Spotify's Basic Pitch model (Apache-2.0),

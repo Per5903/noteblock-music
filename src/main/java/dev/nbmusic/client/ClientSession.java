@@ -1,11 +1,13 @@
 package dev.nbmusic.client;
 
 import dev.nbmusic.NbMusicMod;
+import dev.nbmusic.Texts;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.UploadBuffer;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.io.AudioDecoder;
 import dev.nbmusic.core.layout.LayoutGenerator;
+import dev.nbmusic.core.model.Instrument;
 import dev.nbmusic.core.model.MidiNote;
 import dev.nbmusic.core.model.Song;
 import dev.nbmusic.core.transcribe.AudioTranscriber;
@@ -17,10 +19,10 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Player;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -33,14 +35,14 @@ public final class ClientSession {
 	public static final ClientSession INSTANCE = new ClientSession();
 
 	public Path file;
-	/** Что отправлять на сервер: сам MIDI или MIDI, распознанный из аудио. */
+	/** Что отправлять на сервер: сам MIDI/NBS или MIDI, распознанный из аудио. */
 	public Path uploadFile;
 	/** 0..1, пока идёт распознавание аудио; -1 — не идёт. */
 	public volatile double transcribeProgress = -1;
 	private int loadGeneration;
 	public Song song;
 	public Pipeline.Result result;
-	public String error;
+	public Component error;
 
 	public int speed = 100;
 	public int polyphony = Arranger.Options.DEFAULT.maxPolyphony();
@@ -52,17 +54,50 @@ public final class ClientSession {
 	/** Закреплённое место голограммы; null — голограмма следует за игроком. */
 	public Placement pinned;
 
+	private boolean restored;
+
 	public record Placement(BlockPos anchor, Direction forward) {
 	}
 
-	/** Канал MIDI, как его показывает список дорожек. */
-	public record Channel(int channel, int program, int notes) {
+	/**
+	 * Дорожка в списке: MIDI-канал с основной программой либо, для .nbs, инструмент нотного блока.
+	 */
+	public record Channel(int channel, int program, int notes, Instrument instrument) {
 		public boolean isDrums() {
-			return channel == MidiNote.DRUM_CHANNEL;
+			return instrument == null && channel == MidiNote.DRUM_CHANNEL;
 		}
 	}
 
 	private ClientSession() {
+		ClientConfig.Data c = ClientConfig.load();
+		speed = c.speed;
+		polyphony = c.polyphony;
+		transpose = c.transpose;
+		rowLength = c.rowLength;
+		hologram = c.hologram;
+	}
+
+	/** При первом открытии окна — снова открыть последний файл. */
+	public void restoreLastFile() {
+		if (restored) {
+			return;
+		}
+		restored = true;
+		String last = ClientConfig.load().lastFile;
+		if (file == null && last != null && Files.isRegularFile(Path.of(last))) {
+			load(Path.of(last));
+		}
+	}
+
+	public void saveConfig() {
+		ClientConfig.Data c = new ClientConfig.Data();
+		c.speed = speed;
+		c.polyphony = polyphony;
+		c.transpose = transpose;
+		c.rowLength = rowLength;
+		c.hologram = hologram;
+		c.lastFile = file == null ? null : file.toAbsolutePath().toString();
+		ClientConfig.save(c);
 	}
 
 	public Arranger.Options options() {
@@ -95,15 +130,17 @@ public final class ClientSession {
 		pinned = null;
 		error = null;
 		transcribeProgress = -1;
-		if (AudioDecoder.isAudio(path.getFileName().toString())) {
+		saveConfig();
+		String name = path.getFileName().toString();
+		if (AudioDecoder.isAudio(name)) {
 			transcribeAsync(path, generation);
 			return;
 		}
-		try (InputStream in = Files.newInputStream(path)) {
-			song = Pipeline.load(Pipeline.baseName(path.getFileName().toString()), in);
+		try {
+			song = Pipeline.load(Pipeline.baseName(name), Pipeline.extension(name), Files.readAllBytes(path));
 			uploadFile = path;
 		} catch (IOException | RuntimeException e) {
-			error = "Не удалось прочитать: " + e.getMessage();
+			error = Texts.tr("nbmusic.gui.read_failed", "Could not read: %s", Texts.error(e));
 			return;
 		}
 		recompute();
@@ -120,7 +157,7 @@ public final class ClientSession {
 					}
 				});
 				// копия рядом со схемами — её можно открыть в любом MIDI-редакторе
-				Path copy = NbMusicMod.outputDir().resolve(SchematicExport.fileName(r.song().title()).replace(".schem", ".mid"));
+				Path copy = NbMusicMod.outputDir().resolve(SchematicExport.fileBase(r.song().title()) + ".mid");
 				Files.createDirectories(copy.getParent());
 				Files.copy(r.midi(), copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 				Minecraft.getInstance().execute(() -> {
@@ -133,11 +170,11 @@ public final class ClientSession {
 					recompute();
 				});
 			} catch (IOException | RuntimeException e) {
-				NbMusicMod.LOGGER.warn("Не удалось распознать {}", path, e);
+				NbMusicMod.LOGGER.warn("Could not transcribe {}", path, e);
 				Minecraft.getInstance().execute(() -> {
 					if (generation == loadGeneration) {
 						transcribeProgress = -1;
-						error = "Не удалось распознать: " + e.getMessage();
+						error = Texts.tr("nbmusic.gui.transcribe_failed", "Could not transcribe: %s", Texts.error(e));
 					}
 				});
 			}
@@ -149,6 +186,7 @@ public final class ClientSession {
 	/** Пересчёт аранжировки и схемы после изменения настроек. */
 	public void recompute() {
 		PreviewPlayer.INSTANCE.stop();
+		saveConfig();
 		if (song == null) {
 			return;
 		}
@@ -157,7 +195,7 @@ public final class ClientSession {
 			error = null;
 		} catch (IllegalArgumentException e) {
 			result = null;
-			error = e.getMessage();
+			error = Texts.error(e);
 		}
 	}
 
@@ -167,9 +205,13 @@ public final class ClientSession {
 		}
 		int[] counts = new int[16];
 		int[][] programs = new int[16][128];
+		Instrument[] instruments = new Instrument[16];
 		for (MidiNote n : song.notes()) {
 			counts[n.channel()]++;
 			programs[n.channel()][n.program()]++;
+			if (n.instrument() != null) {
+				instruments[n.channel()] = n.instrument();
+			}
 		}
 		List<Channel> out = new ArrayList<>();
 		for (int ch = 0; ch < 16; ch++) {
@@ -183,7 +225,7 @@ public final class ClientSession {
 					main = i;
 				}
 			}
-			out.add(new Channel(ch, main, counts[ch]));
+			out.add(new Channel(ch, main, counts[ch], instruments[ch]));
 		}
 		return out;
 	}
@@ -210,30 +252,33 @@ public final class ClientSession {
 		pinned = pinned == null && result != null ? placement(player) : null;
 	}
 
-	/** Экспорт .schem локально, в папку клиента. */
-	public String export(Player player) {
+	/**
+	 * Экспорт во все форматы в папку клиента. В одиночной игре .nbt ещё и кладётся в мир —
+	 * тогда сразу работает /place template.
+	 */
+	public Component export(Player player) {
 		try {
-			List<Path> written = SchematicExport.export(result, player.getName().getString());
-			return "Сохранено: " + written.getFirst().toAbsolutePath()
-					+ (written.size() > 1 ? " (и в папку WorldEdit)" : "");
+			var server = Minecraft.getInstance().getSingleplayerServer();
+			Path structures = server == null ? null : SchematicExport.structuresDir(server);
+			return SchematicExport.export(result, player.getName().getString(), structures).message();
 		} catch (IOException e) {
-			return "Не удалось сохранить: " + e.getMessage();
+			return Texts.tr("nbmusic.gui.export_failed", "Could not save: %s", Texts.error(e));
 		}
 	}
 
-	/** Отправляет файл на сервер кусками и просит построить там, где стоит голограмма. */
-	public String requestBuild(Player player) {
+	/** Отправляет файл на сервер кусками и просит построить там, где стоит голограмма; null — отправлено. */
+	public Component requestBuild(Player player) {
 		if (!ClientPlayNetworking.canSend(BuildRequestPayload.TYPE)) {
-			return "На сервере нет NoteBlock Music — используй экспорт .schem";
+			return Texts.tr("nbmusic.gui.no_server_mod", "NoteBlock Music is not installed on the server — use export instead");
 		}
 		byte[] bytes;
 		try {
 			bytes = Files.readAllBytes(uploadFile);
 		} catch (IOException e) {
-			return "Не удалось прочитать файл: " + e.getMessage();
+			return Texts.tr("nbmusic.gui.read_failed", "Could not read: %s", Texts.error(e));
 		}
 		if (bytes.length > UploadBuffer.MAX_BYTES) {
-			return "Файл больше 2 МБ";
+			return Texts.tr("nbmusic.gui.too_large", "The file is larger than 2 MB");
 		}
 		int total = UploadBuffer.chunkCount(bytes.length);
 		for (int i = 0; i < total; i++) {
@@ -242,7 +287,8 @@ public final class ClientSession {
 			ClientPlayNetworking.send(new UploadChunkPayload(i, total, Arrays.copyOfRange(bytes, from, to)));
 		}
 		Placement p = placement(player);
-		ClientPlayNetworking.send(new BuildRequestPayload(song.title(), options(), rowLength, p.anchor(), p.forward()));
+		String format = Pipeline.extension(uploadFile.getFileName().toString()).equals("nbs") ? "nbs" : "mid";
+		ClientPlayNetworking.send(new BuildRequestPayload(song.title(), format, options(), rowLength, p.anchor(), p.forward()));
 		pinned = null;
 		return null;
 	}

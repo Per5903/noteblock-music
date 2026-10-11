@@ -47,6 +47,12 @@ dependencies {
 	// кнопка настроек в списке модов; в рантайме не обязателен
 	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 
+	// Необязательно: моды из run-mods/ (не в git) подгружаются в игровые тесты — так клиентский тест
+	// проверяет, что настоящая Litematica открывает наш .litematic.
+	if (file("run-mods").isDirectory()) {
+		gametestRuntimeOnly fileTree("run-mods") { include "*.jar" }
+	}
+
 	testImplementation platform("org.junit:junit-bom:${project.junit_version}")
 	testImplementation 'org.junit.jupiter:junit-jupiter'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

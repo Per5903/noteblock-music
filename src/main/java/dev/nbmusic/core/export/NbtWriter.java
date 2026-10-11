@@ -14,8 +14,12 @@ final class NbtWriter implements Closeable {
 	private static final int LONG = 4;
 	private static final int BYTE_ARRAY = 7;
 	private static final int STRING = 8;
-	private static final int COMPOUND = 10;
+	static final int LIST = 9;
+	static final int COMPOUND = 10;
 	private static final int INT_ARRAY = 11;
+	private static final int LONG_ARRAY = 12;
+	static final int TAG_END = END;
+	static final int TAG_INT = INT;
 
 	private final DataOutputStream out;
 
@@ -68,6 +72,40 @@ final class NbtWriter implements Closeable {
 		header(INT_ARRAY, name);
 		out.writeInt(value.length);
 		for (int v : value) {
+			out.writeInt(v);
+		}
+		return this;
+	}
+
+	NbtWriter putLongArray(String name, long[] value) throws IOException {
+		header(LONG_ARRAY, name);
+		out.writeInt(value.length);
+		for (long v : value) {
+			out.writeLong(v);
+		}
+		return this;
+	}
+
+	/**
+	 * Начало списка. Элементы-соединения пишутся как обычные поля и закрываются
+	 * {@link #endCompound()} без открытия; числа — {@link #listInt(int)}.
+	 */
+	NbtWriter beginList(String name, int elementType, int size) throws IOException {
+		header(LIST, name);
+		out.writeByte(elementType);
+		out.writeInt(size);
+		return this;
+	}
+
+	NbtWriter listInt(int value) throws IOException {
+		out.writeInt(value);
+		return this;
+	}
+
+	/** Список целых: {@code pos: [x, y, z]}. */
+	NbtWriter putIntList(String name, int... values) throws IOException {
+		beginList(name, INT, values.length);
+		for (int v : values) {
 			out.writeInt(v);
 		}
 		return this;

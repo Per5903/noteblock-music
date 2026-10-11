@@ -8,13 +8,28 @@ import dev.nbmusic.core.model.MidiNote;
 import dev.nbmusic.core.model.Song;
 import dev.nbmusic.world.SchematicPlacer;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
+import dev.nbmusic.core.export.StructureWriter;
+import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Vec3i;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.level.block.ButtonBlock;
 import net.minecraft.world.level.block.NoteBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -73,11 +88,45 @@ public class LayoutGameTest {
 		run(helper, Direction.EAST, new BlockPos(0, 1, 0), arrangement, 9);
 	}
 
+	/**
+	 * Схема, записанная в ванильный .nbt нашим StructureWriter, загружается кодом игры
+	 * (StructureTemplate, как /place template) и должна играть так же точно.
+	 */
+	@GameTest(maxTicks = 1200, padding = 64)
+	public void structureNbtPlays(GameTestHelper helper) {
+		run(helper, Direction.EAST, new BlockPos(0, 1, 0), Arranger.arrange(testSong(), new Arranger.Options(100, 6, 0)), 3,
+				LayoutGameTest::placeViaStructureNbt);
+	}
+
+	interface Placer {
+		void place(ServerLevel level, BlockPos anchor, Direction forward, BlockGrid grid);
+	}
+
+	private static void placeViaStructureNbt(ServerLevel level, BlockPos anchor, Direction forward, BlockGrid grid) {
+		try {
+			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+			StructureWriter.write(grid, SharedConstants.getCurrentVersion().dataVersion().version(), bytes);
+			CompoundTag tag = NbtIo.readCompressed(new ByteArrayInputStream(bytes.toByteArray()), NbtAccounter.unlimitedHeap());
+			StructureTemplate template = new StructureTemplate();
+			template.load(BuiltInRegistries.BLOCK, tag);
+			if (!template.getSize().equals(new Vec3i(grid.width(), grid.height(), grid.length()))) {
+				throw new IllegalStateException("размер структуры " + template.getSize());
+			}
+			template.placeInWorld(level, anchor, anchor, new StructurePlaceSettings(), level.getRandom(), Block.UPDATE_CLIENTS);
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
 	private static void run(GameTestHelper helper, Direction forward, BlockPos origin) {
 		run(helper, forward, origin, Arranger.arrange(testSong(), new Arranger.Options(100, 6, 0)), 3);
 	}
 
 	private static void run(GameTestHelper helper, Direction forward, BlockPos origin, Arrangement arrangement, int levels) {
+		run(helper, forward, origin, arrangement, levels, SchematicPlacer::place);
+	}
+
+	private static void run(GameTestHelper helper, Direction forward, BlockPos origin, Arrangement arrangement, int levels, Placer placer) {
 		LayoutGenerator.Layout layout = LayoutGenerator.generate(arrangement, ROW_LENGTH);
 		BlockGrid grid = layout.grid();
 		if (layout.rows() < 3 || layout.levels() != levels) {
@@ -95,7 +144,7 @@ public class LayoutGameTest {
 				forced.add(new long[]{cx, cz});
 			}
 		}
-		SchematicPlacer.place(helper.getLevel(), anchor, forward, grid);
+		placer.place(helper.getLevel(), anchor, forward, grid);
 
 		List<BlockPos> noteBlocks = new ArrayList<>();
 		for (int y = 0; y < grid.height(); y++) {

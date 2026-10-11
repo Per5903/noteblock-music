@@ -11,11 +11,12 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.nbmusic.NbMusicMod;
+import dev.nbmusic.Texts;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.io.AudioDecoder;
-import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.core.layout.LayoutGenerator;
+import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.world.SchematicExport;
 import dev.nbmusic.world.SchematicPlacer;
 import dev.nbmusic.world.SongBuilder;
@@ -82,8 +83,16 @@ public final class NbMusicCommand {
 										.executes(c -> start(c, resolve(c), settings(c, 3), action))))));
 	}
 
+	/** @param given сколько необязательных аргументов указано: скорость, полифония, ширина */
+	private static Settings settings(CommandContext<CommandSourceStack> c, int given) {
+		int speed = IntegerArgumentType.getInteger(c, "speed");
+		int poly = given >= 2 ? IntegerArgumentType.getInteger(c, "polyphony") : Arranger.Options.DEFAULT.maxPolyphony();
+		int width = given >= 3 ? IntegerArgumentType.getInteger(c, "width") : LayoutGenerator.DEFAULT_ROW_LENGTH;
+		return new Settings(new Arranger.Options(speed, poly, 0), width);
+	}
+
 	/**
-	 * MIDI и уже распознанное аудио обрабатываются сразу. Новое аудио распознаётся в фоне,
+	 * MIDI, NBS и уже распознанное аудио обрабатываются сразу. Новое аудио распознаётся в фоне,
 	 * а действие выполняется в игровом потоке, когда ноты готовы.
 	 */
 	private static int start(CommandContext<CommandSourceStack> c, Path file, Settings settings, Action action) throws CommandSyntaxException {
@@ -100,7 +109,8 @@ public final class NbMusicCommand {
 		}
 		CommandSourceStack source = c.getSource();
 		MinecraftServer server = source.getServer();
-		source.sendSuccess(() -> Component.literal("Распознаю ноты в «" + name + "» — это займёт до минуты, результат придёт в чат"), false);
+		source.sendSuccess(() -> Texts.tr("nbmusic.cmd.transcribing",
+				"Transcribing “%s” — this takes up to a minute, the result will appear in chat", name), false);
 		CompletableFuture.supplyAsync(() -> {
 			try {
 				return AudioTranscriber.transcribe(file, cache, p -> {
@@ -110,9 +120,8 @@ public final class NbMusicCommand {
 			}
 		}, TRANSCRIBE).whenComplete((song, error) -> server.execute(() -> {
 			if (error != null) {
-				Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
-				NbMusicMod.LOGGER.warn("Не удалось распознать {}", name, cause);
-				source.sendFailure(Component.literal("Не удалось распознать «" + name + "»: " + cause.getMessage()));
+				NbMusicMod.LOGGER.warn("Could not transcribe {}", name, error);
+				source.sendFailure(Texts.tr("nbmusic.cmd.transcribe_failed", "Could not transcribe “%s”: %s", name, Texts.error(error)));
 				return;
 			}
 			Pipeline.Result r = process(c, () -> Pipeline.arrange(song, settings.options(), settings.rowLength()));
@@ -126,14 +135,6 @@ public final class NbMusicCommand {
 			}
 		}));
 		return Command.SINGLE_SUCCESS;
-	}
-
-	/** @param given сколько необязательных аргументов указано: скорость, полифония, ширина */
-	private static Settings settings(CommandContext<CommandSourceStack> c, int given) {
-		int speed = IntegerArgumentType.getInteger(c, "speed");
-		int poly = given >= 2 ? IntegerArgumentType.getInteger(c, "polyphony") : Arranger.Options.DEFAULT.maxPolyphony();
-		int width = given >= 3 ? IntegerArgumentType.getInteger(c, "width") : LayoutGenerator.DEFAULT_ROW_LENGTH;
-		return new Settings(new Arranger.Options(speed, poly, 0), width);
 	}
 
 	private static final SuggestionProvider<CommandSourceStack> FILES = (c, builder) -> {
@@ -161,17 +162,18 @@ public final class NbMusicCommand {
 		Path dir = NbMusicMod.inputDir().toAbsolutePath().normalize();
 		Path file = dir.resolve(StringArgumentType.getString(c, "file")).normalize();
 		if (!file.startsWith(dir) || !Files.isRegularFile(file)) {
-			throw new SimpleCommandExceptionType(Component.literal("Нет такого файла в " + dir)).create();
+			throw new SimpleCommandExceptionType(Texts.tr("nbmusic.cmd.no_file", "No such file in %s", dir.toString())).create();
 		}
 		return file;
 	}
 
 	private static int list(CommandContext<CommandSourceStack> c) {
 		List<String> files = inputFiles();
-		String text = files.isEmpty()
-				? "Папка пуста. Положи .mid / .mp3 / .wav / .ogg в " + NbMusicMod.inputDir().toAbsolutePath()
-				: "Файлы (" + files.size() + "):\n  " + String.join("\n  ", files);
-		c.getSource().sendSuccess(() -> Component.literal(text), false);
+		Component text = files.isEmpty()
+				? Texts.tr("nbmusic.cmd.list_empty", "The folder is empty. Put .mid / .nbs / .mp3 / .wav / .ogg into %s",
+						NbMusicMod.inputDir().toAbsolutePath().toString())
+				: Texts.tr("nbmusic.cmd.list", "Files (%s):", files.size()).append("\n  " + String.join("\n  ", files));
+		c.getSource().sendSuccess(() -> text, false);
 		return files.size();
 	}
 
@@ -183,28 +185,25 @@ public final class NbMusicCommand {
 		try {
 			return job.get();
 		} catch (IOException | IllegalArgumentException e) {
-			c.getSource().sendFailure(Component.literal("Ошибка: " + e.getMessage()));
+			c.getSource().sendFailure(Texts.tr("nbmusic.cmd.error", "Error: %s", Texts.error(e)));
 			return null;
 		}
 	}
 
 	private static int info(CommandContext<CommandSourceStack> c, Pipeline.Result r) {
-		c.getSource().sendSuccess(() -> Component.literal(SongBuilder.summary(r)), false);
+		c.getSource().sendSuccess(() -> SongBuilder.summary(r), false);
 		return Command.SINGLE_SUCCESS;
 	}
 
 	private static int export(CommandContext<CommandSourceStack> c, Pipeline.Result r) {
 		try {
-			List<Path> written = SchematicExport.export(r, c.getSource().getTextName());
-			StringBuilder msg = new StringBuilder(SongBuilder.summary(r)).append("\nСохранено: ").append(written.getFirst().toAbsolutePath());
-			if (written.size() > 1) {
-				msg.append("\nWorldEdit: //schem load ").append(Pipeline.baseName(written.get(1).getFileName().toString()));
-			}
-			c.getSource().sendSuccess(() -> Component.literal(msg.toString()), false);
+			SchematicExport.Exported e = SchematicExport.export(r, c.getSource().getTextName(),
+					SchematicExport.structuresDir(c.getSource().getServer()));
+			c.getSource().sendSuccess(() -> SongBuilder.summary(r).copy().append("\n").append(e.message()), false);
 			return Command.SINGLE_SUCCESS;
 		} catch (IOException e) {
-			NbMusicMod.LOGGER.error("Не удалось записать схематику", e);
-			c.getSource().sendFailure(Component.literal("Не удалось записать: " + e.getMessage()));
+			NbMusicMod.LOGGER.error("Could not write the schematic", e);
+			c.getSource().sendFailure(Texts.tr("nbmusic.cmd.write_failed", "Could not write: %s", Texts.error(e)));
 			return 0;
 		}
 	}
@@ -215,11 +214,11 @@ public final class NbMusicCommand {
 		Direction forward = player.getDirection();
 		BlockPos anchor = SchematicPlacer.anchorInFrontOf(player.blockPosition(), forward, r.layout().button());
 		try {
-			String text = SongBuilder.build(player.level(), r, anchor, forward);
-			c.getSource().sendSuccess(() -> Component.literal(text), true);
+			Component text = SongBuilder.build(player.level(), r, anchor, forward);
+			c.getSource().sendSuccess(() -> text, true);
 			return Command.SINGLE_SUCCESS;
 		} catch (IllegalArgumentException e) {
-			c.getSource().sendFailure(Component.literal(e.getMessage()));
+			c.getSource().sendFailure(Texts.error(e));
 			return 0;
 		}
 	}

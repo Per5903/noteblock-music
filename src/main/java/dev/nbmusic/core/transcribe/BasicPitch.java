@@ -50,7 +50,7 @@ public final class BasicPitch {
 		if (m == null) {
 			try (InputStream in = BasicPitch.class.getResourceAsStream(MODEL)) {
 				if (in == null) {
-					throw new IOException("в моде нет модели " + MODEL);
+					throw new IOException("model resource missing: " + MODEL);
 				}
 				m = OnnxModel.parse(in.readAllBytes());
 			}

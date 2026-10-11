@@ -35,11 +35,11 @@ public class NbMusicMod implements ModInitializer {
 			Files.createDirectories(inputDir());
 			Files.createDirectories(outputDir());
 		} catch (IOException e) {
-			LOGGER.error("Не удалось создать папки {}", inputDir().getParent(), e);
+			LOGGER.error("Could not create folders {}", inputDir().getParent(), e);
 		}
 		CommandRegistrationCallback.EVENT.register((dispatcher, ctx, env) -> NbMusicCommand.register(dispatcher));
 		ServerNetworking.register();
-		LOGGER.info("NoteBlock Music {} загружен, папка с MIDI: {}",
+		LOGGER.info("NoteBlock Music {} loaded, music folder: {}",
 				FabricLoader.getInstance().getModContainer(MOD_ID).orElseThrow().getMetadata().getVersion().getFriendlyString(),
 				inputDir().toAbsolutePath());
 	}

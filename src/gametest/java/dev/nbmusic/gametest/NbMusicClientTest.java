@@ -5,6 +5,7 @@ import dev.nbmusic.client.ClientSession;
 import dev.nbmusic.client.NbMusicClient;
 import dev.nbmusic.client.NbMusicScreen;
 import dev.nbmusic.client.PreviewPlayer;
+import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.UploadBuffer;
 import dev.nbmusic.core.transcribe.AudioTranscriber;
 import dev.nbmusic.core.Pipeline;
@@ -12,6 +13,7 @@ import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.layout.BlockGrid;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.core.model.MidiNote;
+import dev.nbmusic.world.SchematicExport;
 import dev.nbmusic.world.SchematicPlacer;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -34,6 +36,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -47,6 +50,8 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		try {
+			// без сохранённых настроек прошлого запуска: окно не должно открыть «последний файл»
+			Files.deleteIfExists(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("nbmusic.json"));
 			writeTestMidi(NbMusicMod.inputDir().resolve("test.mid"));
 		} catch (Exception e) {
 			throw new AssertionError("не удалось записать test.mid", e);
@@ -85,6 +90,7 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 			buildAndPlay(context, world, server, layout, Direction.EAST, new BlockPos(0, 150, 0), "east");
 			buildAndPlay(context, world, server, layout, Direction.NORTH, new BlockPos(200, 150, 0), "north");
 			screenFlow(context, world, server);
+			exportFlow(context, world, server);
 			audioFlow(context, world, server);
 			log("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ");
 		}
@@ -176,21 +182,21 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 				&& ClientSession.INSTANCE.file.getFileName().toString().equals("big.mid")), "файл выбран и разложен");
 		context.takeScreenshot("nbmusic-gui");
 
-		context.clickScreenButton("▶ Слушать");
+		context.clickScreenButton("▶ Listen");
 		context.waitTicks(40);
 		int played = context.computeOnClient(mc -> PreviewPlayer.INSTANCE.notesPlayed);
 		log("предпрослушивание: за 2 с прозвучало нот " + played);
 		check(played > 0 && context.computeOnClient(mc -> PreviewPlayer.INSTANCE.isPlaying()), "предпрослушивание играет");
 		context.takeScreenshot("nbmusic-gui-playing");
-		context.clickScreenButton("■ Стоп");
+		context.clickScreenButton("■ Stop");
 		context.waitTicks(2);
 		check(!context.computeOnClient(mc -> PreviewPlayer.INSTANCE.isPlaying()), "кнопка «Стоп» останавливает");
 
-		context.clickScreenButton("Закрепить здесь");
+		context.clickScreenButton("Pin here");
 		ClientSession.Placement pinned = context.computeOnClient(mc -> ClientSession.INSTANCE.pinned);
 		check(pinned != null, "голограмма закреплена");
 		LayoutGenerator.Layout layout = context.computeOnClient(mc -> ClientSession.INSTANCE.result.layout());
-		context.clickScreenButton("Готово");
+		context.clickScreenButton("Done");
 		// смотрим на голограмму сбоку-сверху; игрок улетает, а голограмма остаётся на месте
 		BlockPos mid = SchematicPlacer.toWorld(pinned.anchor(), pinned.forward(), layout.grid().width() / 2, 0, layout.grid().length() / 2);
 		server.runCommand(String.format("tp @a %d %d %d -90 50", mid.getX() - 45, mid.getY() + 40, mid.getZ()));
@@ -200,7 +206,7 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 
 		context.getInput().pressKey(NbMusicClient.OPEN);
 		context.waitTicks(3);
-		context.clickScreenButton("Построить");
+		context.clickScreenButton("Build");
 		context.waitTicks(20);
 		check(context.computeOnClient(mc -> mc.gui.screen() == null), "после «Построить» окно закрылось");
 
@@ -221,6 +227,99 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 		check(built, "«Построить» поставил схему ровно по голограмме (" + notes.size() + " нотных блоков)");
 		context.waitTicks(5);
 		context.takeScreenshot("nbmusic-built-from-gui");
+	}
+
+	/**
+	 * Этап 5: экспорт из окна во все форматы, и каждый файл открывает «чужой» код —
+	 * .nbt ставит ванильная /place template, .litematic читает настоящая Litematica
+	 * (если она лежит в run-mods), .nbs мод читает обратно.
+	 */
+	private static void exportFlow(ClientGameTestContext context, TestSingleplayerContext world, TestServerContext server) {
+		context.runOnClient(mc -> ClientSession.INSTANCE.load(NbMusicMod.inputDir().resolve("test.mid")));
+		context.waitTicks(2);
+		Pipeline.Result result = context.computeOnClient(mc -> ClientSession.INSTANCE.result);
+		String message = context.computeOnClient(mc -> ClientSession.INSTANCE.export(mc.player).getString());
+		log("экспорт: " + message.replace("\n", " | "));
+		String base = SchematicExport.fileBase(result.song().title());
+		String structure = SchematicExport.structureName(result.song().title());
+		for (String file : List.of(base + ".schem", base + ".litematic", structure + ".nbt", base + ".nbs")) {
+			check(Files.isRegularFile(NbMusicMod.outputDir().resolve(file)), "экспорт записал " + file);
+		}
+		check(message.contains("/place template nbmusic:" + structure), "сообщение подсказывает /place template");
+
+		// .nbt — ванильной командой
+		BlockGrid grid = result.layout().grid();
+		BlockPos at = new BlockPos(800, 140, 0);
+		server.runCommand(String.format("tp @a %d %d %d", at.getX() + grid.width() / 2, at.getY() + 20, at.getZ() + grid.length() / 2));
+		world.getConnection().waitForChunksRender();
+		context.waitTicks(10);
+		server.runCommand(String.format("place template nbmusic:%s %d %d %d", structure, at.getX(), at.getY(), at.getZ()));
+		context.waitTicks(5);
+		List<BlockPos> notes = new ArrayList<>();
+		for (int y = 0; y < grid.height(); y++) {
+			for (int z = 0; z < grid.length(); z++) {
+				for (int x = 0; x < grid.width(); x++) {
+					if (grid.get(x, y, z).startsWith("minecraft:note_block")) {
+						notes.add(at.offset(x, y, z));
+					}
+				}
+			}
+		}
+		boolean placed = server.computeOnServer(s -> notes.stream().allMatch(p -> s.overworld().getBlockState(p).getBlock() instanceof NoteBlock));
+		check(placed, "/place template nbmusic:" + structure + " поставил все " + notes.size() + " нотных блоков");
+
+		// .litematic — настоящей Litematica
+		if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("litematica")) {
+			String mismatch = context.computeOnClient(mc -> compareWithLitematica(NbMusicMod.outputDir(), base + ".litematic", grid));
+			check(mismatch == null, "Litematica открыла .litematic, все блоки совпали" + (mismatch == null ? "" : ": " + mismatch));
+		} else {
+			log("Litematica не установлена в тестовом окружении (run-mods) — проверка .litematic пропущена");
+		}
+
+		// .nbs — обратно в мод
+		context.runOnClient(mc -> ClientSession.INSTANCE.load(NbMusicMod.outputDir().resolve(base + ".nbs")));
+		context.waitTicks(2);
+		Pipeline.Result back = context.computeOnClient(mc -> ClientSession.INSTANCE.result);
+		check(back != null && back.arrangement().placedNotes() == result.arrangement().placedNotes()
+				&& back.arrangement().chords().keySet().equals(result.arrangement().chords().keySet()),
+				".nbs из экспорта загружается обратно с теми же нотами и тиками");
+	}
+
+	/** Сравнение через API Litematica (рефлексией: компиляция от неё не зависит). null — всё совпало. */
+	private static String compareWithLitematica(Path dir, String fileName, BlockGrid grid) {
+		try {
+			Class<?> cls = Class.forName("fi.dy.masa.litematica.schematic.LitematicaSchematic");
+			Object schematic = cls.getMethod("createFromFile", Path.class, String.class).invoke(null, dir, fileName);
+			if (schematic == null) {
+				return "createFromFile вернул null";
+			}
+			@SuppressWarnings("unchecked")
+			Map<String, BlockPos> sizes = (Map<String, BlockPos>) cls.getMethod("getAreaSizes").invoke(schematic);
+			if (sizes.size() != 1) {
+				return "регионов " + sizes.size();
+			}
+			var region = sizes.entrySet().iterator().next();
+			BlockPos size = region.getValue();
+			if (Math.abs(size.getX()) != grid.width() || Math.abs(size.getY()) != grid.height() || Math.abs(size.getZ()) != grid.length()) {
+				return "размер " + size;
+			}
+			Object container = cls.getMethod("getSubRegionContainer", String.class).invoke(schematic, region.getKey());
+			var get = container.getClass().getMethod("get", int.class, int.class, int.class);
+			for (int y = 0; y < grid.height(); y++) {
+				for (int z = 0; z < grid.length(); z++) {
+					for (int x = 0; x < grid.width(); x++) {
+						Object state = get.invoke(container, x, y, z);
+						if (!state.equals(SchematicPlacer.parse(grid.get(x, y, z)))) {
+							return "блок " + x + " " + y + " " + z + ": " + state + " вместо " + grid.get(x, y, z);
+						}
+					}
+				}
+			}
+			log("Litematica: регион «" + region.getKey() + "» " + size + ", " + grid.width() * grid.height() * grid.length() + " блоков совпали");
+			return null;
+		} catch (ReflectiveOperationException e) {
+			return e.toString();
+		}
 	}
 
 	/** Ноты синтетической мелодии из resources/audio (как в юнит-тесте AudioPipelineTest). */
@@ -268,7 +367,7 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 			context.waitTicks(5);
 			waited += 5;
 		}
-		String error = context.computeOnClient(mc -> ClientSession.INSTANCE.error);
+		String error = context.computeOnClient(mc -> ClientSession.INSTANCE.error == null ? null : ClientSession.INSTANCE.error.getString());
 		check(error == null, "OGG распознан без ошибок (" + error + "), ~" + waited / 20.0 + " с");
 		List<Integer> pitches = context.computeOnClient(mc -> ClientSession.INSTANCE.song.notes().stream().map(MidiNote::pitch).toList());
 		log("OGG → ноты " + pitches);
@@ -280,10 +379,10 @@ public final class NbMusicClientTest implements FabricClientGameTest {
 		context.waitTicks(3);
 		context.takeScreenshot("nbmusic-audio-ready");
 
-		context.clickScreenButton("Закрепить здесь");
+		context.clickScreenButton("Pin here");
 		ClientSession.Placement pinned = context.computeOnClient(mc -> ClientSession.INSTANCE.pinned);
 		LayoutGenerator.Layout layout = context.computeOnClient(mc -> ClientSession.INSTANCE.result.layout());
-		context.clickScreenButton("Построить");
+		context.clickScreenButton("Build");
 		context.waitTicks(20);
 		BlockGrid grid = layout.grid();
 		List<BlockPos> notes = new ArrayList<>();

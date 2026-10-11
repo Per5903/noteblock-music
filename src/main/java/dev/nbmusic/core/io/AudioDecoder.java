@@ -1,5 +1,6 @@
 package dev.nbmusic.core.io;
 
+import dev.nbmusic.core.Msg;
 import fr.delthas.javamp3.Sound;
 
 import javax.sound.sampled.AudioFormat;
@@ -39,13 +40,13 @@ public final class AudioDecoder {
 			case "wav" -> wav(data);
 			case "mp3" -> mp3(data);
 			case "ogg" -> ogg(data);
-			default -> throw new IOException("Неизвестный формат аудио: ." + extension);
+			default -> throw new Msg.Failure(new Msg("nbmusic.error.audio_format", "Unknown audio format: .%s", extension));
 		};
 		if (audio.samples.length == 0) {
-			throw new IOException("В файле нет звука");
+			throw new Msg.Failure(new Msg("nbmusic.error.no_sound", "The file has no sound"));
 		}
 		if (audio.seconds() > MAX_SECONDS) {
-			throw new IOException("Слишком длинный трек: " + (int) audio.seconds() / 60 + " мин (максимум " + MAX_SECONDS / 60 + ")");
+			throw new Msg.Failure(new Msg("nbmusic.error.too_long", "The track is too long (max %s min)", MAX_SECONDS / 60));
 		}
 		return audio;
 	}
@@ -54,26 +55,43 @@ public final class AudioDecoder {
 		try (AudioInputStream in = AudioSystem.getAudioInputStream(new BufferedInputStream(new ByteArrayInputStream(data)))) {
 			return pcm(in.readAllBytes(), in.getFormat());
 		} catch (UnsupportedAudioFileException e) {
-			throw new IOException("WAV не распознан: " + e.getMessage(), e);
+			throw new Msg.Failure(new Msg("nbmusic.error.wav", "WAV not recognized: %s", String.valueOf(e.getMessage())), e);
 		}
 	}
 
 	private static Audio mp3(byte[] data) throws IOException {
-		try (Sound sound = new Sound(new BufferedInputStream(new ByteArrayInputStream(data)))) {
+		// javamp3 не пропускает теги: в обложке из ID3 он находит ложный «кадр» и падает.
+		// Поэтому отдаём ему только MPEG-кадры: от первого настоящего кадра Layer III до хвостовых тегов.
+		int from = Mp3Frames.firstFrame(data, Mp3Frames.skipId3v2(data));
+		if (from < 0) {
+			throw new Msg.Failure(new Msg("nbmusic.error.mp3_no_frames", "MP3 not recognized: no MPEG Layer III frames found"));
+		}
+		int to = Mp3Frames.audioEnd(data);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		AudioFormat format;
+		try (Sound sound = new Sound(new BufferedInputStream(new ByteArrayInputStream(data, from, Math.max(0, to - from))))) {
+			format = sound.getAudioFormat();
 			// decodeFullyInto в javamp3 1.0.1 останавливается после первого буфера — читаем сами
-			ByteArrayOutputStream out = new ByteArrayOutputStream();
 			byte[] buf = new byte[1 << 16];
 			long limit = (long) MAX_SECONDS * sound.getSamplingFrequency() * 4 + buf.length;
-			for (int n; (n = sound.read(buf)) > 0; ) {
-				out.write(buf, 0, n);
-				if (out.size() > limit) {
-					throw new IOException("Слишком длинный трек (максимум " + MAX_SECONDS / 60 + " мин)");
+			long oneSecond = (long) sound.getSamplingFrequency() * 4;
+			try {
+				for (int n; (n = sound.read(buf)) > 0; ) {
+					out.write(buf, 0, n);
+					if (out.size() > limit) {
+						throw new Msg.Failure(new Msg("nbmusic.error.too_long", "The track is too long (max %s min)", MAX_SECONDS / 60));
+					}
+				}
+			} catch (RuntimeException e) {
+				// повреждённый кадр в конце файла — оставляем то, что уже раскодировано
+				if (out.size() < oneSecond) {
+					throw e;
 				}
 			}
-			return pcm(out.toByteArray(), sound.getAudioFormat());
 		} catch (RuntimeException e) {
-			throw new IOException("MP3 не распознан: " + e.getMessage(), e);
+			throw new Msg.Failure(new Msg("nbmusic.error.mp3", "MP3 not recognized: %s", e.toString()), e);
 		}
+		return pcm(out.toByteArray(), format);
 	}
 
 	/** OGG Vorbis через stb_vorbis из LWJGL — он есть в клиенте Minecraft, но не на выделенном сервере. */
@@ -81,7 +99,7 @@ public final class AudioDecoder {
 		try {
 			Class.forName("org.lwjgl.stb.STBVorbis", false, AudioDecoder.class.getClassLoader());
 		} catch (ClassNotFoundException e) {
-			throw new IOException("OGG распознаётся только в клиенте игры — используй окно мода или MP3/WAV", e);
+			throw new Msg.Failure(new Msg("nbmusic.error.ogg_client_only", "OGG can only be decoded in the game client — use the mod window or MP3/WAV"), e);
 		}
 		return OggDecoder.decode(data);
 	}
@@ -95,10 +113,10 @@ public final class AudioDecoder {
 		boolean isFloat = enc == AudioFormat.Encoding.PCM_FLOAT;
 		boolean signed = enc == AudioFormat.Encoding.PCM_SIGNED;
 		if (!isFloat && !signed && enc != AudioFormat.Encoding.PCM_UNSIGNED) {
-			throw new IOException("Кодировка " + enc + " не поддерживается, сохрани WAV как PCM");
+			throw new Msg.Failure(new Msg("nbmusic.error.wav_encoding", "Encoding %s is not supported, save the WAV as PCM", enc.toString()));
 		}
 		if (bytesPerSample < 1 || bytesPerSample > 4 || (isFloat && bits != 32)) {
-			throw new IOException(bits + "-битный звук не поддерживается");
+			throw new Msg.Failure(new Msg("nbmusic.error.bit_depth", "%s-bit audio is not supported", bits));
 		}
 		int frame = bytesPerSample * channels;
 		int frames = bytes.length / frame;

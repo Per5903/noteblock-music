@@ -71,7 +71,18 @@ public final class Arranger {
 			}
 			int tick = (int) Math.round(m.seconds() * ticksPerSecond);
 			Note note;
-			if (m.isDrum()) {
+			if (m.instrument() != null) {
+				// инструмент выбран заранее (.nbs): только переносим в его диапазон
+				if (m.instrument().isPercussion()) {
+					note = new Note(tick, m.instrument(), Math.clamp(m.pitch() - MidiNote.PERCUSSION_BASE, 0, Instrument.KEYS - 1), m.velocity());
+				} else {
+					Fit fit = fit(List.of(m.instrument()), m.pitch() + options.transpose());
+					if (fit.shifted) {
+						shifted++;
+					}
+					note = new Note(tick, fit.instrument, fit.key, m.velocity());
+				}
+			} else if (m.isDrum()) {
 				InstrumentMapper.Drum d = InstrumentMapper.drum(m.pitch());
 				note = new Note(tick, d.instrument(), d.key(), m.velocity());
 			} else {

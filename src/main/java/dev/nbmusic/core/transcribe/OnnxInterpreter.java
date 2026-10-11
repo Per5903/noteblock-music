@@ -46,7 +46,7 @@ final class OnnxInterpreter {
 				}
 				Tensor t = values.get(name);
 				if (t == null) {
-					throw new IllegalStateException("нет значения " + name + " для " + node.op());
+					throw new IllegalStateException("missing value " + name + " for " + node.op());
 				}
 				in.add(t);
 			}
@@ -54,7 +54,7 @@ final class OnnxInterpreter {
 			try {
 				out = execute(node, in);
 			} catch (RuntimeException e) {
-				throw new IllegalStateException("ошибка в узле " + i + " " + node.op() + " " + in, e);
+				throw new IllegalStateException("failed at node " + i + " " + node.op() + " " + in, e);
 			}
 			values.put(node.outputs().getFirst(), out);
 			for (String name : node.inputs()) {
@@ -96,7 +96,7 @@ final class OnnxInterpreter {
 					node.intAttr("noop_with_empty_axes", 0) != 0, Reduction.SUM);
 			case "ReduceMax" -> reduce(in.get(0), node.ints("axes", null), node.intAttr("keepdims", 1) != 0, false, Reduction.MAX);
 			case "ReduceMin" -> reduce(in.get(0), node.ints("axes", null), node.intAttr("keepdims", 1) != 0, false, Reduction.MIN);
-			default -> throw new UnsupportedOperationException("операция " + node.op() + " не поддерживается");
+			default -> throw new UnsupportedOperationException("operator " + node.op() + " is not supported");
 		};
 	}
 
@@ -367,7 +367,7 @@ final class OnnxInterpreter {
 				int o = r - s.length + i;
 				if (s[i] != 1) {
 					if (out[o] != 1 && out[o] != s[i]) {
-						throw new IllegalArgumentException("несовместимые формы для broadcast");
+						throw new IllegalArgumentException("shapes are not broadcastable");
 					}
 					out[o] = s[i];
 				}
@@ -542,7 +542,7 @@ final class OnnxInterpreter {
 			throw new UnsupportedOperationException("Conv group != 1");
 		}
 		if (x.rank() != 4) {
-			throw new UnsupportedOperationException("Conv поддерживается только 2D");
+			throw new UnsupportedOperationException("only 2D Conv is supported");
 		}
 		long[] strides = node.ints("strides", new long[]{1, 1});
 		long[] dil = node.ints("dilations", new long[]{1, 1});

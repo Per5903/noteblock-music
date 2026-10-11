@@ -1,5 +1,6 @@
 package dev.nbmusic.core.io;
 
+import dev.nbmusic.core.Msg;
 import dev.nbmusic.core.model.MidiNote;
 import dev.nbmusic.core.model.Song;
 
@@ -30,7 +31,7 @@ public final class MidiDecoder {
 		try {
 			seq = MidiSystem.getSequence(in);
 		} catch (InvalidMidiDataException e) {
-			throw new IOException("Не MIDI-файл: " + e.getMessage(), e);
+			throw new Msg.Failure(new Msg("nbmusic.error.not_midi", "Not a MIDI file: %s", String.valueOf(e.getMessage())), e);
 		}
 		return decode(title, seq);
 	}

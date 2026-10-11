@@ -38,3 +38,6 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# чужие моды для локальной проверки совместимости (Litematica и т.п.), не коммитятся
+run-mods/

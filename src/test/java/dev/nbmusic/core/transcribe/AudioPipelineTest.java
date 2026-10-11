@@ -47,6 +47,53 @@ class AudioPipelineTest {
 		assertTrue(peak > 0.2 && peak < 1.0, "пик " + peak);
 	}
 
+	/**
+	 * ID3v2 с «обложкой» из случайных байт и ложными синхрословами Layer I впереди, ID3v1 сзади —
+	 * так выглядят обычные MP3 из интернета; без пропуска тегов javamp3 падал.
+	 */
+	@Test
+	void decodesMp3WithTags() throws Exception {
+		byte[] mp3 = resource("/audio/melody.mp3");
+		byte[] art = new byte[50_000];
+		new java.util.Random(7).nextBytes(art);
+		for (int i = 0; i < art.length - 4; i += 997) {
+			art[i] = (byte) 0xFF;
+			art[i + 1] = (byte) 0xFF; // ложный заголовок MPEG-1 Layer I
+		}
+		int size = art.length;
+		byte[] header = {'I', 'D', '3', 3, 0, 0, (byte) (size >> 21 & 0x7F), (byte) (size >> 14 & 0x7F), (byte) (size >> 7 & 0x7F), (byte) (size & 0x7F)};
+		byte[] id3v1 = new byte[128];
+		id3v1[0] = 'T';
+		id3v1[1] = 'A';
+		id3v1[2] = 'G';
+		var all = new ByteArrayOutputStream();
+		all.writeBytes(header);
+		all.writeBytes(art);
+		all.writeBytes(mp3);
+		all.writeBytes(id3v1);
+		AudioDecoder.Audio a = AudioDecoder.decode("mp3", all.toByteArray());
+		assertEquals(6.0, a.seconds(), 0.1);
+	}
+
+	/** NBMUSIC_LOCAL_MP3=<файл>: проверка на настоящем треке (файл в репозиторий не попадает). */
+	@Test
+	void decodesLocalMp3() throws Exception {
+		String path = System.getenv("NBMUSIC_LOCAL_MP3");
+		org.junit.jupiter.api.Assumptions.assumeTrue(path != null);
+		long t0 = System.nanoTime();
+		AudioDecoder.Audio a = AudioDecoder.decode("mp3", Files.readAllBytes(Path.of(path)));
+		long decodeMs = (System.nanoTime() - t0) / 1_000_000;
+		Path cache = Files.createTempDirectory("nbcache");
+		long t1 = System.nanoTime();
+		AudioTranscriber.Result r = AudioTranscriber.transcribe(Path.of(path), cache, p -> {
+		});
+		long ms = (System.nanoTime() - t1) / 1_000_000;
+		var res = Pipeline.arrange(r.song(), Arranger.Options.DEFAULT, 48);
+		System.out.printf("LOCAL: %.1f s, %d Hz, decode %d ms, transcribe %d ms, notes %d, placed %d, dropped %d, levels %d, rows %d%n",
+				a.seconds(), a.sampleRate(), decodeMs, ms, r.song().notes().size(), res.arrangement().placedNotes(),
+				res.arrangement().droppedNotes(), res.layout().levels(), res.layout().rows());
+	}
+
 	@Test
 	void decodesWavOfDifferentDepths() throws Exception {
 		for (int bits : new int[]{8, 16, 24}) {

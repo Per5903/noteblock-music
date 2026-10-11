@@ -1,6 +1,6 @@
 # NoteBlock Music
 
-**Load a MIDI or MP3 / WAV / OGG file — get a note block contraption that plays it.**
+**Load a MIDI, Note Block Studio or MP3 / WAV / OGG file — get a note block contraption that plays it.**
 The mod arranges the song for note blocks, lays it out as a compact redstone snake and builds it in front of you (or exports a `.schem` for WorldEdit).
 
 ![Hologram preview](https://raw.githubusercontent.com/Per5903/noteblock-music/main/docs/hologram.png)
@@ -16,12 +16,15 @@ The mod arranges the song for note blocks, lays it out as a compact redstone sna
 - **Settings window** (default key **R**, also available from Mod Menu): pick a file, speed, polyphony, transpose, row width, mute individual MIDI channels.
 - **Preview playback** with real note block sounds before you build anything.
 - **Hologram**: see exactly where and how big the build will be, pin it, then press *Build*.
-- **Builds facing your look direction**; `.schem` export for WorldEdit / FAWE.
+- **Builds facing your look direction.**
+- **Export to every format at once:** `.schem` (WorldEdit / FAWE), `.litematic` (Litematica — appears right in its menu),
+  `.nbt` (vanilla `/place template nbmusic:<name>`, no mods needed), `.nbs` (edit in Note Block Studio).
+- **Note Block Studio import** — `.nbs` songs keep their exact instruments and pitches.
 - Commands for servers and scripts: `/nbmusic list | info | export | build <file> [speed%] [polyphony] [width]`.
 
 ## How to use
 
-1. Put `.mid`, `.mp3`, `.wav` or `.ogg` files into `.minecraft/nbmusic/input/` (the *Folder* button opens it) or choose one with *Browse…*.
+1. Put `.mid`, `.nbs`, `.mp3`, `.wav` or `.ogg` files into `.minecraft/nbmusic/input/` (the *Folder* button opens it) or choose one with *Browse…*.
 2. Press **R**, tweak settings, press **▶ Listen** to preview.
 3. Look where the song should go, press *Pin here* (or let the hologram follow you) and press **Build**.
 4. Press the red-marked button at the start of the contraption.
@@ -37,7 +40,7 @@ Building requires operator rights (in singleplayer: *Allow Cheats*). Export work
   To build from the window or use `/nbmusic` on a server, install the mod there too.
 - Every release is tested with real redstone: an automated test builds the contraption, presses the button and checks that every note plays on its exact tick.
 
-The interface is currently in Russian; an English translation is planned.
+Languages: English and Russian (follows the game language).
 
 Third-party: Basic Pitch model © 2022 Spotify AB (Apache-2.0), javamp3 (MIT).
 
@@ -49,7 +52,8 @@ Third-party: Basic Pitch model © 2022 Spotify AB (Apache-2.0), javamp3 (MIT).
 
 - Окно настроек на **R** (и через Mod Menu): файл, скорость, полифония, транспонирование, ширина ряда, выключение дорожек.
 - Предпрослушивание звуками нотных блоков, голограмма будущей постройки, постройка по взгляду.
+- Импорт `.nbs`; экспорт сразу в `.schem`, `.litematic`, `.nbt` (`/place template`) и `.nbs`. Интерфейс на русском и английском.
 - Аккорды — этажами (до 18 нот одновременно), развороты змейки без задержки — ритм точный.
 - Команды: `/nbmusic list | info | export | build <файл> [скорость%] [полифония] [ширина]`.
 
-Файлы кладутся в `.minecraft/nbmusic/input/`. Для постройки нужны права оператора (в одиночной игре — «Разрешить читы»).
+Файлы (`.mid`, `.nbs`, `.mp3`, `.wav`, `.ogg`) кладутся в `.minecraft/nbmusic/input/`. Для постройки нужны права оператора (в одиночной игре — «Разрешить читы»).

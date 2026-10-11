@@ -56,11 +56,12 @@ public final class SchematicPlacer {
 		}
 	}
 
-	private static BlockState parse(String state) {
+	/** Строка состояния вида {@code minecraft:repeater[delay=2,...]} → состояние блока. */
+	public static BlockState parse(String state) {
 		try {
 			return BlockStateParser.parseForBlock(BuiltInRegistries.BLOCK, state, false).blockState();
 		} catch (CommandSyntaxException e) {
-			throw new IllegalStateException("Некорректное состояние блока: " + state, e);
+			throw new IllegalStateException("Invalid block state: " + state, e);
 		}
 	}
 }

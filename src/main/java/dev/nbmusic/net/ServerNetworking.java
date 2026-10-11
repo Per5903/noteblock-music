@@ -1,6 +1,7 @@
 package dev.nbmusic.net;
 
 import dev.nbmusic.NbMusicMod;
+import dev.nbmusic.Texts;
 import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.UploadBuffer;
 import dev.nbmusic.core.arrange.Arranger;
@@ -13,16 +14,17 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /** Приём файла из окна мода и постройка там, где игрок поставил голограмму. */
 public final class ServerNetworking {
 	/** Насколько далеко от игрока можно строить по голограмме. */
 	private static final int MAX_DISTANCE = 128;
+	private static final Set<String> FORMATS = Set.of("mid", "nbs");
 
 	private static final Map<UUID, UploadBuffer> UPLOADS = new HashMap<>();
 
@@ -38,7 +40,7 @@ public final class ServerNetworking {
 			}
 			UploadBuffer buffer = UPLOADS.computeIfAbsent(ctx.player().getUUID(), id -> new UploadBuffer());
 			if (!buffer.accept(payload.index(), payload.total(), payload.data())) {
-				ctx.player().sendSystemMessage(Component.literal("NoteBlock Music: файл повреждён или больше 2 МБ"));
+				tell(ctx.player(), Texts.tr("nbmusic.net.upload_bad", "The file is damaged or larger than 2 MB"));
 			}
 		});
 		ServerPlayNetworking.registerGlobalReceiver(BuildRequestPayload.TYPE, (payload, ctx) -> build(ctx.player(), payload));
@@ -49,34 +51,38 @@ public final class ServerNetworking {
 		return Commands.LEVEL_GAMEMASTERS.check(player.permissions());
 	}
 
+	private static void tell(ServerPlayer player, Component text) {
+		player.sendSystemMessage(Component.literal("[NoteBlock Music] ").append(text));
+	}
+
 	private static void build(ServerPlayer player, BuildRequestPayload request) {
 		if (!isAllowed(player)) {
-			player.sendSystemMessage(Component.literal("NoteBlock Music: строить можно только с правами оператора (читами)"));
+			tell(player, Texts.tr("nbmusic.net.no_permission", "Building requires operator rights (cheats in singleplayer)"));
 			return;
 		}
 		UploadBuffer buffer = UPLOADS.remove(player.getUUID());
 		if (buffer == null || !buffer.isComplete()) {
-			player.sendSystemMessage(Component.literal("NoteBlock Music: файл не дошёл до сервера, попробуй ещё раз"));
+			tell(player, Texts.tr("nbmusic.net.upload_missing", "The file did not reach the server, try again"));
 			return;
 		}
 		Arranger.Options o = request.options();
-		if (o.speedPercent() < 10 || o.speedPercent() > 400 || o.maxPolyphony() < 1 || o.maxPolyphony() > LayoutGenerator.MAX_LEVELS * 2
+		if (!FORMATS.contains(request.format())
+				|| o.speedPercent() < 10 || o.speedPercent() > 400 || o.maxPolyphony() < 1 || o.maxPolyphony() > LayoutGenerator.MAX_LEVELS * 2
 				|| request.rowLength() < LayoutGenerator.MIN_ROW_LENGTH || request.rowLength() > 1024
 				|| request.forward().getAxis().isVertical()) {
-			player.sendSystemMessage(Component.literal("NoteBlock Music: неверные настройки"));
+			tell(player, Texts.tr("nbmusic.net.bad_settings", "Invalid settings"));
 			return;
 		}
 		if (request.anchor().distSqr(player.blockPosition()) > (double) MAX_DISTANCE * MAX_DISTANCE) {
-			player.sendSystemMessage(Component.literal("NoteBlock Music: голограмма дальше " + MAX_DISTANCE + " блоков от тебя"));
+			tell(player, Texts.tr("nbmusic.net.too_far", "The hologram is more than %s blocks away from you", MAX_DISTANCE));
 			return;
 		}
 		try {
-			Pipeline.Result r = Pipeline.arrange(Pipeline.load(request.title(), new ByteArrayInputStream(buffer.bytes())), o, request.rowLength());
-			String text = SongBuilder.build(player.level(), r, request.anchor(), request.forward());
-			player.sendSystemMessage(Component.literal(text));
-			NbMusicMod.LOGGER.info("{} построил «{}» в {}", player.getName().getString(), request.title(), request.anchor());
+			Pipeline.Result r = Pipeline.arrange(Pipeline.load(request.title(), request.format(), buffer.bytes()), o, request.rowLength());
+			tell(player, SongBuilder.build(player.level(), r, request.anchor(), request.forward()));
+			NbMusicMod.LOGGER.info("{} built \"{}\" at {}", player.getName().getString(), request.title(), request.anchor());
 		} catch (IOException | IllegalArgumentException e) {
-			player.sendSystemMessage(Component.literal("NoteBlock Music: " + e.getMessage()));
+			tell(player, Texts.error(e));
 		}
 	}
 }

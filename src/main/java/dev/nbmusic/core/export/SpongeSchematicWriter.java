@@ -1,5 +1,6 @@
 package dev.nbmusic.core.export;
 
+import dev.nbmusic.core.Msg;
 import dev.nbmusic.core.layout.BlockGrid;
 
 import java.io.ByteArrayOutputStream;
@@ -26,7 +27,7 @@ public final class SpongeSchematicWriter {
 		int h = grid.height();
 		int l = grid.length();
 		if (w > 0xFFFF || h > 0xFFFF || l > 0xFFFF) {
-			throw new IOException("Схематика больше 65535 блоков по одной оси: " + w + "×" + h + "×" + l);
+			throw new Msg.Failure(new Msg("nbmusic.error.schem_too_big", "The schematic is larger than 65535 blocks along one axis: %s×%s×%s", w, h, l));
 		}
 
 		Map<String, Integer> palette = new LinkedHashMap<>();

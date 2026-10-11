@@ -60,7 +60,7 @@ final class OnnxModel {
 			}
 		}
 		if (m.nodes.isEmpty()) {
-			throw new IOException("в ONNX-файле нет графа");
+			throw new IOException("ONNX file has no graph");
 		}
 		return m;
 	}
@@ -240,7 +240,7 @@ final class OnnxModel {
 			}
 			t = Tensor.bools(shape, data);
 		} else {
-			throw new IOException("тип тензора " + type + " не поддерживается (" + name + ")");
+			throw new IOException("tensor type " + type + " not supported (" + name + ")");
 		}
 		return new NamedTensor(name, t);
 	}
@@ -278,7 +278,7 @@ final class OnnxModel {
 			long result = 0;
 			for (int shift = 0; shift < 64; shift += 7) {
 				if (pos >= end) {
-					throw new IOException("обрыв varint");
+					throw new IOException("truncated varint");
 				}
 				byte x = b[pos++];
 				result |= (long) (x & 0x7F) << shift;
@@ -286,12 +286,12 @@ final class OnnxModel {
 					return result;
 				}
 			}
-			throw new IOException("слишком длинный varint");
+			throw new IOException("varint too long");
 		}
 
 		float fixed32Float() throws IOException {
 			if (pos + 4 > end) {
-				throw new IOException("обрыв fixed32");
+				throw new IOException("truncated fixed32");
 			}
 			int bits = (b[pos] & 0xFF) | (b[pos + 1] & 0xFF) << 8 | (b[pos + 2] & 0xFF) << 16 | (b[pos + 3] & 0xFF) << 24;
 			pos += 4;
@@ -301,7 +301,7 @@ final class OnnxModel {
 		Reader sub() throws IOException {
 			int len = (int) varint();
 			if (len < 0 || pos + len > end) {
-				throw new IOException("обрыв вложенного сообщения");
+				throw new IOException("truncated nested message");
 			}
 			Reader r = new Reader(b, pos, pos + len);
 			pos += len;
@@ -329,10 +329,10 @@ final class OnnxModel {
 				case 1 -> pos += 8;
 				case 2 -> skipBytes();
 				case 5 -> pos += 4;
-				default -> throw new IOException("неизвестный тип поля " + wire);
+				default -> throw new IOException("unknown wire type " + wire);
 			}
 			if (pos > end) {
-				throw new IOException("обрыв поля");
+				throw new IOException("truncated field");
 			}
 		}
 	}
