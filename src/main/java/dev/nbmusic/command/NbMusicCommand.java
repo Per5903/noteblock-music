@@ -15,6 +15,7 @@ import dev.nbmusic.core.Pipeline;
 import dev.nbmusic.core.arrange.Arranger;
 import dev.nbmusic.core.export.SpongeSchematicWriter;
 import dev.nbmusic.core.layout.BlockGrid;
+import dev.nbmusic.core.layout.GridPos;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.world.SchematicPlacer;
 import net.fabricmc.loader.api.FabricLoader;
@@ -22,6 +23,7 @@ import net.minecraft.SharedConstants;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -35,7 +37,7 @@ import java.util.stream.Stream;
 
 /**
  * /nbmusic list
- * /nbmusic info|export|build &lt;файл&gt; [скорость%] [полифония]
+ * /nbmusic info|export|build &lt;файл&gt; [скорость%] [полифония] [ширина]
  */
 public final class NbMusicCommand {
 	private static final int MAX_BUILD_VOLUME = 4_000_000;
@@ -43,8 +45,13 @@ public final class NbMusicCommand {
 	private NbMusicCommand() {
 	}
 
+	/** Параметры команды: аранжировка + длина ряда змейки. */
+	private record Settings(Arranger.Options options, int rowLength) {
+		static final Settings DEFAULT = new Settings(Arranger.Options.DEFAULT, LayoutGenerator.DEFAULT_ROW_LENGTH);
+	}
+
 	private interface Action {
-		int run(CommandContext<CommandSourceStack> c, Path file, Arranger.Options options) throws CommandSyntaxException;
+		int run(CommandContext<CommandSourceStack> c, Path file, Settings settings) throws CommandSyntaxException;
 	}
 
 	public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
@@ -59,16 +66,21 @@ public final class NbMusicCommand {
 	private static ArgumentBuilder<CommandSourceStack, ?> withFile(String name, Action action) {
 		return Commands.literal(name).then(Commands.argument("file", StringArgumentType.string())
 				.suggests(FILES)
-				.executes(c -> action.run(c, resolve(c), Arranger.Options.DEFAULT))
+				.executes(c -> action.run(c, resolve(c), Settings.DEFAULT))
 				.then(Commands.argument("speed", IntegerArgumentType.integer(10, 400))
-						.executes(c -> action.run(c, resolve(c), options(c, false)))
-						.then(Commands.argument("polyphony", IntegerArgumentType.integer(1, LayoutGenerator.MAX_LANES * 2))
-								.executes(c -> action.run(c, resolve(c), options(c, true))))));
+						.executes(c -> action.run(c, resolve(c), settings(c, 1)))
+						.then(Commands.argument("polyphony", IntegerArgumentType.integer(1, LayoutGenerator.MAX_LEVELS * 2))
+								.executes(c -> action.run(c, resolve(c), settings(c, 2)))
+								.then(Commands.argument("width", IntegerArgumentType.integer(LayoutGenerator.MIN_ROW_LENGTH, 1024))
+										.executes(c -> action.run(c, resolve(c), settings(c, 3)))))));
 	}
 
-	private static Arranger.Options options(CommandContext<CommandSourceStack> c, boolean withPolyphony) {
-		int poly = withPolyphony ? IntegerArgumentType.getInteger(c, "polyphony") : Arranger.Options.DEFAULT.maxPolyphony();
-		return new Arranger.Options(IntegerArgumentType.getInteger(c, "speed"), poly, 0);
+	/** @param given сколько необязательных аргументов указано: скорость, полифония, ширина */
+	private static Settings settings(CommandContext<CommandSourceStack> c, int given) {
+		int speed = IntegerArgumentType.getInteger(c, "speed");
+		int poly = given >= 2 ? IntegerArgumentType.getInteger(c, "polyphony") : Arranger.Options.DEFAULT.maxPolyphony();
+		int width = given >= 3 ? IntegerArgumentType.getInteger(c, "width") : LayoutGenerator.DEFAULT_ROW_LENGTH;
+		return new Settings(new Arranger.Options(speed, poly, 0), width);
 	}
 
 	private static final SuggestionProvider<CommandSourceStack> FILES = (c, builder) -> {
@@ -110,9 +122,9 @@ public final class NbMusicCommand {
 		return files.size();
 	}
 
-	private static Pipeline.Result process(CommandContext<CommandSourceStack> c, Path file, Arranger.Options options) {
+	private static Pipeline.Result process(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
 		try {
-			return Pipeline.run(file, options);
+			return Pipeline.run(file, settings.options(), settings.rowLength());
 		} catch (IOException | IllegalArgumentException e) {
 			c.getSource().sendFailure(Component.literal("Ошибка: " + e.getMessage()));
 			return null;
@@ -122,14 +134,14 @@ public final class NbMusicCommand {
 	private static String summary(Pipeline.Result r) {
 		var a = r.arrangement();
 		BlockGrid g = r.layout().grid();
-		return String.format("«%s»: %.1f с, нот %d → %d (срезано %d, перенесено по октаве %d), дорожек %d, размер %d×%d×%d",
+		return String.format("«%s»: %.1f с, нот %d → %d (срезано %d, перенесено по октаве %d), этажей %d, рядов %d, размер %d×%d×%d",
 				r.song().title(), a.lengthTicks() / (double) Arranger.TICKS_PER_SECOND,
 				a.inputNotes(), a.placedNotes(), a.droppedNotes(), a.shiftedNotes(),
-				r.layout().lanes(), g.width(), g.height(), g.length());
+				r.layout().levels(), r.layout().rows(), g.width(), g.height(), g.length());
 	}
 
-	private static int info(CommandContext<CommandSourceStack> c, Path file, Arranger.Options options) {
-		Pipeline.Result r = process(c, file, options);
+	private static int info(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
+		Pipeline.Result r = process(c, file, settings);
 		if (r == null) {
 			return 0;
 		}
@@ -137,8 +149,8 @@ public final class NbMusicCommand {
 		return Command.SINGLE_SUCCESS;
 	}
 
-	private static int export(CommandContext<CommandSourceStack> c, Path file, Arranger.Options options) {
-		Pipeline.Result r = process(c, file, options);
+	private static int export(CommandContext<CommandSourceStack> c, Path file, Settings settings) {
+		Pipeline.Result r = process(c, file, settings);
 		if (r == null) {
 			return 0;
 		}
@@ -163,16 +175,19 @@ public final class NbMusicCommand {
 		}
 	}
 
+	/** При //schem load + //paste кнопка окажется в 2 блоках к востоку от игрока, на уровне ног. */
 	private static void writeSchematic(Pipeline.Result r, Path out, String author, int dataVersion) throws IOException {
+		GridPos button = r.layout().button();
+		int[] offset = {2 - button.x(), -button.y(), -button.z()};
 		try (OutputStream os = Files.newOutputStream(out)) {
-			SpongeSchematicWriter.write(r.layout().grid(), r.song().title(), author, dataVersion, os);
+			SpongeSchematicWriter.write(r.layout().grid(), r.song().title(), author, dataVersion, offset, os);
 		}
 	}
 
-	/** Ставит схему в мир: начало в 2 блоках по +X от игрока, механизм на уровне ног, кнопка напротив игрока. */
-	private static int build(CommandContext<CommandSourceStack> c, Path file, Arranger.Options options) throws CommandSyntaxException {
+	/** Ставит схему перед игроком по направлению его взгляда; уровень механизма — на уровне ног. */
+	private static int build(CommandContext<CommandSourceStack> c, Path file, Settings settings) throws CommandSyntaxException {
 		ServerPlayer player = c.getSource().getPlayerOrException();
-		Pipeline.Result r = process(c, file, options);
+		Pipeline.Result r = process(c, file, settings);
 		if (r == null) {
 			return 0;
 		}
@@ -183,9 +198,14 @@ public final class NbMusicCommand {
 			return 0;
 		}
 		ServerLevel level = player.level();
-		BlockPos origin = player.blockPosition().offset(2, -2, -r.layout().buttonZ());
-		SchematicPlacer.place(level, origin, grid);
-		BlockPos button = origin.offset(0, 2, r.layout().buttonZ());
+		Direction forward = player.getDirection();
+		BlockPos anchor = SchematicPlacer.anchorInFrontOf(player.blockPosition(), forward, r.layout().button());
+		if (anchor.getY() < level.getMinY() || anchor.getY() + grid.height() - 1 > level.getMaxY()) {
+			c.getSource().sendFailure(Component.literal("Схема высотой " + grid.height() + " не помещается по высоте мира"));
+			return 0;
+		}
+		SchematicPlacer.place(level, anchor, forward, grid);
+		BlockPos button = SchematicPlacer.toWorld(anchor, forward, r.layout().button());
 		c.getSource().sendSuccess(() -> Component.literal(summary(r) + "\nПостроено. Кнопка запуска: "
 				+ button.getX() + " " + button.getY() + " " + button.getZ()), true);
 		return Command.SINGLE_SUCCESS;

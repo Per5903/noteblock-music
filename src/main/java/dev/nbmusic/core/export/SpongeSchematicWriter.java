@@ -17,7 +17,11 @@ public final class SpongeSchematicWriter {
 	private SpongeSchematicWriter() {
 	}
 
-	public static void write(BlockGrid grid, String name, String author, int dataVersion, OutputStream target) throws IOException {
+	/**
+	 * @param offset сдвиг от точки вставки до минимального угла (WorldEdit вставляет
+	 *               схему в позицию игрока + offset)
+	 */
+	public static void write(BlockGrid grid, String name, String author, int dataVersion, int[] offset, OutputStream target) throws IOException {
 		int w = grid.width();
 		int h = grid.height();
 		int l = grid.length();
@@ -45,7 +49,7 @@ public final class SpongeSchematicWriter {
 					.putShort("Width", w)
 					.putShort("Height", h)
 					.putShort("Length", l)
-					.putIntArray("Offset", 0, 0, 0);
+					.putIntArray("Offset", offset);
 			nbt.beginCompound("Metadata")
 					.putString("Name", name)
 					.putString("Author", author)

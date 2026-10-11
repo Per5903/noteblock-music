@@ -25,6 +25,11 @@ public final class Pipeline {
 	}
 
 	public static Result run(Path file, Arranger.Options options) throws IOException {
+		return run(file, options, LayoutGenerator.DEFAULT_ROW_LENGTH);
+	}
+
+	/** @param rowLength длина ряда змейки в блоках */
+	public static Result run(Path file, Arranger.Options options, int rowLength) throws IOException {
 		String fileName = file.getFileName().toString();
 		String ext = extension(fileName);
 		if (!SUPPORTED_EXTENSIONS.contains(ext)) {
@@ -38,7 +43,7 @@ public final class Pipeline {
 			throw new IOException("В файле нет нот");
 		}
 		Arrangement arrangement = Arranger.arrange(song, options);
-		return new Result(song, arrangement, LayoutGenerator.generate(arrangement));
+		return new Result(song, arrangement, LayoutGenerator.generate(arrangement, rowLength));
 	}
 
 	public static String extension(String fileName) {

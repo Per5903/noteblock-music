@@ -16,11 +16,12 @@ loom {
 
 fabricApi {
 	// ./gradlew runGameTest — headless-сервер ставит схему, жмёт кнопку и сверяет тайминг нот
+	// ./gradlew runClientGameTest — настоящий клиент: команды /nbmusic, игра, скриншоты
 	configureTests {
 		createSourceSet = true
 		modId = "nbmusic-gametest"
 		enableGameTests = true
-		enableClientGameTests = false
+		enableClientGameTests = true
 		eula = true
 	}
 }

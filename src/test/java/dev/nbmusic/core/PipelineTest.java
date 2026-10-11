@@ -5,6 +5,7 @@ import dev.nbmusic.core.arrange.Arranger.Arrangement;
 import dev.nbmusic.core.export.SpongeSchematicWriter;
 import dev.nbmusic.core.io.MidiDecoder;
 import dev.nbmusic.core.layout.BlockGrid;
+import dev.nbmusic.core.layout.BlockStates;
 import dev.nbmusic.core.layout.LayoutGenerator;
 import dev.nbmusic.core.model.Instrument;
 import dev.nbmusic.core.model.MidiNote;
@@ -21,8 +22,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -85,52 +84,63 @@ class PipelineTest {
 		assertEquals(20, a.chords().firstKey());
 	}
 
-	/** Прогоняет сигнал по каждой дорожке и проверяет, что каждая нота звучит в свой тик. */
+	/** Все ноты аранжировки стоят в схеме, у каждого нотного блока воздух сверху и верная подложка. */
 	@Test
-	void layoutTimingMatchesArrangement() {
+	void snakeContainsEveryNote() {
 		List<MidiNote> notes = new ArrayList<>();
-		int[] ticks = {0, 1, 2, 7, 15, 16, 40};
-		for (int t : ticks) {
+		for (int t = 0; t < 300; t += 1 + t % 3) {
 			for (int v = 0; v < 1 + t % 5; v++) {
 				notes.add(new MidiNote(t / 10.0, 0, 0, 56 + v * 3, 100));
 			}
+			if (t % 4 == 0) {
+				notes.add(new MidiNote(t / 10.0, MidiNote.DRUM_CHANNEL, 0, 38, 100));
+			}
 		}
 		Arrangement a = Arranger.arrange(new Song("t", notes), Arranger.Options.DEFAULT);
-		LayoutGenerator.Layout layout = LayoutGenerator.generate(a);
+		int rowLength = 20;
+		LayoutGenerator.Layout layout = LayoutGenerator.generate(a, rowLength);
 		BlockGrid g = layout.grid();
-		assertEquals(LayoutGenerator.lanesFor(a.maxChord()), layout.lanes());
+		assertTrue(layout.rows() > 3, "песня должна сложиться змейкой");
+		assertEquals(LayoutGenerator.levelsFor(a.maxChord()), layout.levels());
+		assertEquals(LayoutGenerator.LEVEL_HEIGHT * layout.levels(), g.height());
+		assertEquals("minecraft:stone_button", BlockStates.name(g.get(layout.button().x(), layout.button().y(), layout.button().z())));
 
-		Pattern delay = Pattern.compile("minecraft:repeater\\[delay=(\\d)");
 		Pattern noteState = Pattern.compile("minecraft:note_block\\[instrument=(\\w+),note=(\\d+)");
-		Map<Integer, List<String>> heard = new TreeMap<>();
-		for (int lane = 0; lane < layout.lanes(); lane++) {
-			int z = LayoutGenerator.laneZ(lane);
-			int time = -1; // сигнал покидает шину на тике -1
-			for (int x = LayoutGenerator.FIRST_REPEATER_X; x < g.width(); x++) {
-				String s = g.get(x, 2, z);
-				Matcher m = delay.matcher(s);
-				if (m.find()) {
-					time += Integer.parseInt(m.group(1));
-				} else if (s.equals("minecraft:white_concrete")) {
-					for (int dz : new int[]{-1, 1}) {
-						Matcher n = noteState.matcher(g.get(x, 2, z + dz));
-						if (n.find()) {
-							assertEquals(BlockGrid.AIR, g.get(x, 3, z + dz), "над нотным блоком нужен воздух");
-							heard.computeIfAbsent(time, k -> new ArrayList<>()).add(n.group(1) + n.group(2));
-						}
+		List<String> placed = new ArrayList<>();
+		for (int y = 0; y < g.height(); y++) {
+			for (int z = 0; z < g.length(); z++) {
+				for (int x = 0; x < g.width(); x++) {
+					Matcher m = noteState.matcher(g.get(x, y, z));
+					if (!m.find()) {
+						continue;
 					}
-				} else {
-					assertEquals(BlockGrid.AIR, s, "дорожка не должна прерываться");
-					break;
+					Instrument inst = Instrument.valueOf(m.group(1).toUpperCase(java.util.Locale.ROOT));
+					assertEquals(BlockGrid.AIR, g.get(x, y + 1, z), "над нотным блоком нужен воздух");
+					assertEquals(inst.baseBlock, g.get(x, y - 1, z), "подложка инструмента");
+					if (inst.needsSupport()) {
+						assertNotEquals(BlockGrid.AIR, g.get(x, y - 2, z), "песку нужна опора");
+					}
+					placed.add(m.group(1) + m.group(2));
 				}
 			}
 		}
-		Map<Integer, List<String>> expected = new TreeMap<>();
-		a.chords().forEach((tick, chord) -> expected.put(tick,
-				chord.stream().map(n -> n.instrument().id + n.key()).toList()));
-		heard.replaceAll((k, v) -> v.stream().sorted().toList());
-		expected.replaceAll((k, v) -> v.stream().sorted().toList());
-		assertEquals(expected, heard);
+		List<String> expected = a.chords().values().stream().flatMap(List::stream)
+				.map(n -> n.instrument().id + n.key()).sorted().toList();
+		assertEquals(expected, placed.stream().sorted().toList());
+		// ряды не вылезают за заявленную длину (плюс зазор и столбец поворота)
+		assertTrue(g.width() <= layout.button().x() + 1 + rowLength + 64, "ширина " + g.width());
+	}
+
+	@Test
+	void rotatesBlockStates() {
+		assertEquals("minecraft:repeater[delay=2,facing=south,locked=false,powered=false]",
+				BlockStates.rotate("minecraft:repeater[delay=2,facing=east,locked=false,powered=false]", 1));
+		assertEquals("minecraft:redstone_wire[east=side,north=up,power=0,south=none,west=none]",
+				BlockStates.rotate("minecraft:redstone_wire[east=none,north=side,power=0,south=none,west=up]", 1));
+		assertEquals("minecraft:hay_block[axis=y]", BlockStates.rotate("minecraft:hay_block[axis=y]", 3));
+		assertEquals("minecraft:dirt", BlockStates.rotate("minecraft:dirt", 2));
+		String s = "minecraft:stone_button[face=floor,facing=east,powered=false]";
+		assertEquals(s, BlockStates.rotate(BlockStates.rotate(s, 3), 1));
 	}
 
 	@Test
@@ -141,7 +151,7 @@ class PipelineTest {
 
 		Pipeline.Result r = Pipeline.run(file, Arranger.Options.DEFAULT);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		SpongeSchematicWriter.write(r.layout().grid(), "song", "test", 4000, out);
+		SpongeSchematicWriter.write(r.layout().grid(), "song", "test", 4000, new int[]{0, 0, 0}, out);
 
 		byte[] raw = new GZIPInputStream(new ByteArrayInputStream(out.toByteArray())).readAllBytes();
 		DataInputStream in = new DataInputStream(new ByteArrayInputStream(raw));

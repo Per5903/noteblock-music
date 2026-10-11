@@ -5,6 +5,7 @@
 	"name": "NoteBlock Music game tests",
 	"environment": "*",
 	"entrypoints": {
-		"fabric-gametest": ["dev.nbmusic.gametest.LayoutGameTest"]
+		"fabric-gametest": ["dev.nbmusic.gametest.LayoutGameTest"],
+		"fabric-client-gametest": ["dev.nbmusic.gametest.NbMusicClientTest"]
 	}
 }
