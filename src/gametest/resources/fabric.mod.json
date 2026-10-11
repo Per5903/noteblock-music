@@ -1,0 +1,10 @@
+{
+	"schemaVersion": 1,
+	"id": "nbmusic-gametest",
+	"version": "1.0.0",
+	"name": "NoteBlock Music game tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": ["dev.nbmusic.gametest.LayoutGameTest"]
+	}
+}

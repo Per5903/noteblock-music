@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "nbmusic",
+	"version": "${version}",
+	"name": "NoteBlock Music",
+	"description": "Загрузи музыку (MIDI) — получи схематику с нотными блоками, которая её играет.",
+	"authors": [
+		"Per5903"
+	],
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.nbmusic.NbMusicMod"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
